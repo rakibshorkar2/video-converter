@@ -19,6 +19,8 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +57,23 @@ jobs:
           ./Scripts/build_ffmpeg_ios.sh
           xcodegen generate
 
+      - name: Compute build number
+        id: version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          if [ -z "$LATEST_TAG" ]; then
+            BUILD=1
+            VERSION="v1.0.1"
+          else
+            PATCH=${LATEST_TAG##*.}
+            BUILD=$((PATCH + 1))
+            VERSION="v1.0.$BUILD"
+          fi
+          echo "build_number=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Next build: $VERSION (build $BUILD)"
+
       - name: Build for device (unsigned)
         run: |
           xcodebuild \
@@ -63,6 +82,7 @@ jobs:
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ steps.version.outputs.build_number || '1' }} \
             CODE_SIGNING_ALLOWED=NO \
             build
 
@@ -72,6 +92,19 @@ jobs:
           name: VideoConverter-unsigned
           path: build/Build/Products/Release-iphoneos/VideoConverter.app
           if-no-files-found: error
+
+      - name: Create GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUILD="${{ steps.version.outputs.build_number }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          cd build/Build/Products/Release-iphoneos
+          zip -r "VideoConverter-$VERSION.zip" VideoConverter.app
+          gh release create "$VERSION" "VideoConverter-$VERSION.zip" \
+            --title "VideoConverter $VERSION (build $BUILD)" \
+            --generate-notes
 
       - name: Notify on failure
         if: failure()
