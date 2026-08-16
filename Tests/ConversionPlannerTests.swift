@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import VideoConverter
 
 final class ConversionPlannerTests: XCTestCase {
