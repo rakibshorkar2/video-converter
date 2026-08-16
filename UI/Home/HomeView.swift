@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 struct HomeView: View {
     @Environment(AppContainer.self) private var container
-    @State private var photosItems: [PhotosPickerItem] = []
+    @State private var showingPhotosPicker = false
     @State private var showingDocumentPicker = false
     @State private var settingsJob: ConversionJob?
     @State private var errorMessage: String?
@@ -44,11 +44,9 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        PhotosPicker(
-                            selection: $photosItems,
-                            maxSelectionCount: 20,
-                            matching: .videos
-                        ) {
+                        Button {
+                            showingPhotosPicker = true
+                        } label: {
                             Label(L10n.addFromPhotos, systemImage: "photo.on.rectangle")
                         }
                         Button {
@@ -60,6 +58,17 @@ struct HomeView: View {
                         Label(L10n.addVideo, systemImage: "plus")
                     }
                 }
+            }
+            .sheet(isPresented: $showingPhotosPicker) {
+                SystemPhotosPicker(
+                    onPicked: { results in
+                        showingPhotosPicker = false
+                        Task { await importPhotosItems(results) }
+                    },
+                    onCancel: {
+                        showingPhotosPicker = false
+                    }
+                )
             }
             .sheet(isPresented: $showingDocumentPicker) {
                 DocumentPicker(
@@ -85,13 +94,6 @@ struct HomeView: View {
                 Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
-            }
-            .onChange(of: photosItems) { _, newItems in
-                guard !newItems.isEmpty else { return }
-                Task {
-                    await importPhotosItems(newItems)
-                    photosItems = []
-                }
             }
             .onChange(of: container.incomingImportError) { _, newValue in
                 guard let newValue else { return }
@@ -122,17 +124,38 @@ struct HomeView: View {
         .transition(.opacity)
     }
 
-    private func importPhotosItems(_ items: [PhotosPickerItem]) async {
-        importingTotal = items.count
+    private func importPhotosItems(_ results: [PHPickerResult]) async {
+        importingTotal = results.count
         var lastJob: ConversionJob?
-        for (index, item) in items.enumerated() {
+        for (index, result) in results.enumerated() {
             importingCurrent = index + 1
+            let provider = result.itemProvider
+            guard let typeIdentifier = Self.videoTypeIdentifier(for: provider) else {
+                errorMessage = L10n.errorImportNotVideo
+                continue
+            }
+            let importService = container.importService
             do {
-                let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) })
-                    ?? item.supportedContentTypes.first(where: { $0.conforms(to: .audiovisualContent) })
-                    ?? UTType.movie
-                let (tempURL, tempFilename) = try await item.loadFileRepresentation(forTypeIdentifier: type.identifier)
-                let job = try await container.importMedia(from: tempURL, fileName: tempFilename, source: .photos)
+                let staged: ImportedMedia = try await withCheckedThrowingContinuation { continuation in
+                    provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                            return
+                        }
+                        guard let url else {
+                            continuation.resume(throwing: ConversionError.importCopyFailed)
+                            return
+                        }
+                        do {
+                            let media = try importService.stageIntoImports(from: url, fileName: provider.suggestedName, source: .photos)
+                            continuation.resume(returning: media)
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+                try await importService.validate(staged)
+                let job = container.queue.addImportedMedia(staged)
                 lastJob = job
             } catch {
                 errorMessage = error.localizedDescription
@@ -143,6 +166,15 @@ struct HomeView: View {
         if let lastJob {
             settingsJob = lastJob
         }
+    }
+
+    private static func videoTypeIdentifier(for provider: NSItemProvider) -> String? {
+        for identifier in provider.registeredTypeIdentifiers {
+            if let type = UTType(identifier), type.conforms(to: .movie) || type.conforms(to: .audiovisualContent) {
+                return identifier
+            }
+        }
+        return provider.registeredTypeIdentifiers.first
     }
 
     private func importURLs(_ urls: [URL], source: MediaImportSource) async {

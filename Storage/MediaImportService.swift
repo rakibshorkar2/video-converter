@@ -36,9 +36,16 @@ struct MediaImportService: MediaImporting {
 
     func importFile(from url: URL, fileName proposedName: String?, source: MediaImportSource) async throws -> ImportedMedia {
         record("start source=\(source.rawValue) name=\(url.lastPathComponent)")
+        let media = try stageIntoImports(from: url, fileName: proposedName, source: source)
+        try await validate(media)
+        record("result=success name=\(media.fileName)")
+        return media
+    }
 
-        // The security-scoped access must stay open until the copy below has
-        // finished, so it is released in a defer.
+    // Synchronous core: security-scoped access, coordinated read and the copy
+    // all happen without any suspension point, so provider temporary files are
+    // consumed while still inside the provider callback.
+    func stageIntoImports(from url: URL, fileName proposedName: String?, source: MediaImportSource) throws -> ImportedMedia {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
 
@@ -49,8 +56,6 @@ struct MediaImportService: MediaImporting {
             throw ConversionError.importAccessDenied
         }
 
-        // No await happens between the caller handing us the URL and the copy
-        // below, so provider temporary files are consumed immediately.
         let coordinatedURL = coordinatedReadURL(from: url)
         let sourceSize = FileStorageManager.fileSize(at: coordinatedURL)
         guard sourceSize > 0 else {
@@ -79,17 +84,6 @@ struct MediaImportService: MediaImporting {
             throw ConversionError.importVerificationFailed
         }
 
-        if validateMedia {
-            do {
-                try await ImportValidator.validate(at: destination)
-                record("validation=passed")
-            } catch {
-                try? FileManager.default.removeItem(at: destination)
-                throw error
-            }
-        }
-
-        record("result=success")
         return ImportedMedia(
             url: destination,
             fileName: destination.lastPathComponent,
@@ -97,6 +91,18 @@ struct MediaImportService: MediaImporting {
             source: source,
             contentType: contentType
         )
+    }
+
+    func validate(_ media: ImportedMedia) async throws {
+        guard validateMedia else { return }
+        do {
+            try await ImportValidator.validate(at: media.url)
+            record("validation=passed name=\(media.fileName)")
+        } catch {
+            try? FileManager.default.removeItem(at: media.url)
+            record("validation=failed name=\(media.fileName)")
+            throw error
+        }
     }
 
     private func coordinatedReadURL(from url: URL) -> URL {
@@ -124,7 +130,7 @@ struct MediaImportService: MediaImporting {
         } else if name.hasPrefix(".") {
             name = "video" + name
         }
-        if name.pathExtension.isEmpty {
+        if (name as NSString).pathExtension.isEmpty {
             let ext = contentType?.preferredFilenameExtension ?? "mov"
             name += ".\(ext)"
         }
