@@ -100,11 +100,11 @@ enum ConversionPlanner {
         case .fhd1080:
             preset = isHEVC ? AVAssetExportPresetHEVC1920x1080 : AVAssetExportPreset1920x1080
         case .hd720:
-            preset = AVAssetExportPreset1280x720
+            preset = isHEVC ? nil : AVAssetExportPreset1280x720
         case .sd480:
-            preset = isHEVC ? AVAssetExportPresetHEVCMediumQuality : AVAssetExportPreset960x540
+            preset = isHEVC ? nil : AVAssetExportPreset960x540
         case .sd360:
-            preset = isHEVC ? AVAssetExportPresetHEVCLowQuality : AVAssetExportPreset640x480
+            preset = isHEVC ? nil : AVAssetExportPreset640x480
         case .qhd1440, .uhd8k:
             preset = nil
         case .original, .custom:
@@ -112,9 +112,9 @@ enum ConversionPlanner {
             case 0.8...:
                 preset = isHEVC ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
             case 0.6..<0.8:
-                preset = isHEVC ? AVAssetExportPresetHEVCMediumQuality : AVAssetExportPresetMediumQuality
+                preset = isHEVC ? nil : AVAssetExportPresetMediumQuality
             default:
-                preset = isHEVC ? AVAssetExportPresetHEVCLowQuality : AVAssetExportPresetLowQuality
+                preset = isHEVC ? nil : AVAssetExportPresetLowQuality
             }
         }
 
@@ -138,9 +138,9 @@ enum ConversionPlanner {
 
     static func presetFrameSize(_ preset: String) -> CGSize {
         switch preset {
-        case AVAssetExportPresetLowQuality, AVAssetExportPresetHEVCLowQuality:
+        case AVAssetExportPresetLowQuality, AVAssetExportPreset640x480:
             return CGSize(width: 640, height: 480)
-        case AVAssetExportPresetMediumQuality, AVAssetExportPresetHEVCMediumQuality, AVAssetExportPreset960x540:
+        case AVAssetExportPresetMediumQuality, AVAssetExportPreset960x540:
             return CGSize(width: 960, height: 540)
         case AVAssetExportPreset1280x720:
             return CGSize(width: 1280, height: 720)

@@ -32,7 +32,8 @@ enum MediaFixtureFactory {
         guard writer.canAdd(videoInput) else { throw fixtureError("cannot add video input") }
         writer.add(videoInput)
         guard writer.startWriting() else { throw fixtureError("startWriting failed") }
-        guard writer.startSession(atSourceTime: .zero) else { throw fixtureError("startSession failed") }
+        writer.startSession(atSourceTime: .zero)
+        guard writer.status == .writing else { throw fixtureError("startSession failed") }
 
         let frameCount = Int((seconds * fps).rounded())
         for i in 0..<frameCount {

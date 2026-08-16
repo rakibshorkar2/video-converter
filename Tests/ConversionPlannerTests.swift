@@ -39,7 +39,7 @@ final class ConversionPlannerTests: XCTestCase {
         XCTAssertEqual(plan.exportPreset, AVAssetExportPresetLowQuality)
     }
 
-    func testHEVCQualityUsesHEVCPreset() async {
+    func testHEVCMediumQualityFallsBackToAVFoundation() async {
         var config = ConversionConfiguration()
         config.videoCodec = .hevc
         config.qualityFactor = 0.5
@@ -48,8 +48,21 @@ final class ConversionPlannerTests: XCTestCase {
             metadata: MediaFixtureFactory.metadataForLandscapeH264(url: URL(fileURLWithPath: "/tmp/a.mp4"))
         )
         let plan = await ConversionPlanner.plan(for: request)
+        XCTAssertEqual(plan.engine, .avFoundation)
+        XCTAssertNil(plan.exportPreset)
+    }
+
+    func testHEVCHighestQualityUsesHEVCHighestPreset() async {
+        var config = ConversionConfiguration()
+        config.videoCodec = .hevc
+        config.qualityFactor = 1.0
+        let request = MediaFixtureFactory.makeRequest(
+            config: config,
+            metadata: MediaFixtureFactory.metadataForLandscapeH264(url: URL(fileURLWithPath: "/tmp/a.mp4"))
+        )
+        let plan = await ConversionPlanner.plan(for: request)
         XCTAssertEqual(plan.engine, .exportSession)
-        XCTAssertEqual(plan.exportPreset, AVAssetExportPresetHEVCMediumQuality)
+        XCTAssertEqual(plan.exportPreset, AVAssetExportPresetHEVCHighestQuality)
     }
 
     func testBitrateOverrideFallsBackToAVFoundation() async {

@@ -114,10 +114,11 @@ final class VideoToolboxEngine: VideoConversionEngine {
             reader.cancelReading()
             throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
         }
-        guard writer.startSession(atSourceTime: .zero) else {
+        writer.startSession(atSourceTime: .zero)
+        guard writer.status == .writing else {
             writer.cancelWriting()
             reader.cancelReading()
-            throw ConversionError.nativeEngineFailed(L10n.errorWriterFailed)
+            throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
         }
 
         let preserveHDR = config.preserveHDR && sourceVideo?.isHDR == true && config.videoCodec == .hevc
@@ -356,6 +357,35 @@ private final class VTPipelineDriver: @unchecked Sendable {
     private var lastActivity = Date()
     private var watchdog: DispatchSourceTimer?
     private let capacity = DispatchSemaphore(value: VTPipelineDriver.maxBufferedSamples)
+
+    init(
+        reader: AVAssetReader,
+        writer: AVAssetWriter,
+        readerOutput: AVAssetReaderOutput,
+        writerInput: AVAssetWriterInput,
+        decoder: VTDecompressionSession,
+        encoder: VTCompressionSession,
+        duration: CMTime,
+        mediaName: String,
+        progress: (@Sendable (ConversionProgress) -> Void)?,
+        cancellation: CancellationToken,
+        throttle: ProgressThrottler,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        self.reader = reader
+        self.writer = writer
+        self.readerOutput = readerOutput
+        self.writerInput = writerInput
+        self.decoder = decoder
+        self.encoder = encoder
+        self.duration = duration
+        self.mediaName = mediaName
+        self.progress = progress
+        self.cancellation = cancellation
+        self.throttle = throttle
+        self.continuation = continuation
+        self.watchdog = nil
+    }
 
     static func run(
         reader: AVAssetReader,

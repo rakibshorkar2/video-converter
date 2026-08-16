@@ -78,10 +78,11 @@ final class StreamCopyEngine: VideoConversionEngine {
             reader.cancelReading()
             throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
         }
-        guard writer.startSession(atSourceTime: .zero) else {
+        writer.startSession(atSourceTime: .zero)
+        guard writer.status == .writing else {
             writer.cancelWriting()
             reader.cancelReading()
-            throw ConversionError.nativeEngineFailed(L10n.errorWriterFailed)
+            throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
         }
 
         do {

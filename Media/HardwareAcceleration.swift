@@ -23,13 +23,13 @@ enum HardwareAcceleration {
         guard status == noErr, let encoder else { return false }
         defer { VTCompressionSessionInvalidate(encoder) }
 
-        var supported: CFBoolean?
-        let copyStatus = VTSessionCopySupportedPropertyDictionary(
-            encoder,
-            key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
-            value: &supported
-        )
-        return copyStatus == noErr && supported == kCFBooleanTrue
+        var supported: CFDictionary?
+        let copyStatus = VTCopySupportedPropertyDictionary(codecType as CFString, &supported)
+        guard copyStatus == noErr, let supported else { return false }
+        return CFDictionaryGetValue(
+            supported,
+            Unmanaged.passUnretained(kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder).toOpaque()
+        ) != nil
     }
 
     static func decoderAvailable(codec: VideoCodecOption) -> Bool {
@@ -62,8 +62,9 @@ enum HardwareAcceleration {
         var value: CFTypeRef?
         let status = VTSessionCopyProperty(
             session,
-            key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
-            valueOut: &value
+            kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+            nil,
+            &value
         )
         return status == noErr && (value as? CFBoolean) == kCFBooleanTrue
     }

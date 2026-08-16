@@ -427,11 +427,12 @@ final class ConversionQueueManager {
                 try await engine.convert(request, progress: progressClosure, cancellation: token)
             }
             group.addTask {
-                try await withTaskCancellationHandler {
+                do {
                     try await watchdog.awaitFire()
-                } onCancel: {
-                    watchdog.cancelWait()
+                } catch {
+                    throw ConversionError.engineStalled(watchdog.fireDetail)
                 }
+                throw ConversionError.engineStalled(watchdog.fireDetail)
             }
             guard let first = try await group.next() else {
                 throw ConversionError.engineStalled(watchdog.fireDetail)
