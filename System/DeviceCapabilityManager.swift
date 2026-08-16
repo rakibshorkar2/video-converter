@@ -97,7 +97,7 @@ final class DeviceCapabilityManager {
         }
         var session: VTDecompressionSession?
         let spec: [String: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true
         ]
         let status = VTDecompressionSessionCreate(
             allocator: nil,

@@ -128,15 +128,6 @@ final class AVFoundationEngine: VideoConversionEngine {
         if preserveHDR, let sv = sourceVideo {
             videoSettings[AVVideoColorPropertiesKey] = Self.colorProperties(for: sv)
         }
-        if hardwareRequested {
-            var encoderSpecification: [String: Any] = [:]
-            if #available(iOS 17.4, *) {
-                encoderSpecification[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
-            } else {
-                encoderSpecification["EnableHardwareAcceleratedVideoEncoder"] = true
-            }
-            videoSettings[AVVideoEncoderSpecificationKey] = encoderSpecification
-        }
 
         let writerVideoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         writerVideoInput.expectsMediaDataInRealTime = false

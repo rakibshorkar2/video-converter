@@ -6,6 +6,7 @@ enum JobStore {
         FileStorageManager.documentsDirectory.appendingPathComponent("queue.json")
     }
 
+    @MainActor
     static func save(_ jobs: [ConversionJob]) {
         let stored = jobs.map { StoredJob(job: $0) }
         do {
