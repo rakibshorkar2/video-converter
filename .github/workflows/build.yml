@@ -25,7 +25,11 @@ jobs:
 
       - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app
+          LATEST=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort | tail -1)
+          if [ -z "$LATEST" ]; then
+            LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1)
+          fi
+          sudo xcode-select -s "$LATEST"
           xcodebuild -version
 
       - name: Install XcodeGen
