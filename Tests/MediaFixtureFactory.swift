@@ -57,7 +57,11 @@ enum MediaFixtureFactory {
             }
         }
         videoInput.markAsFinished()
-        guard await writer.finishWriting() else { throw fixtureError("finishWriting failed") }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writer.finishWriting {
+                continuation.resume()
+            }
+        }
         guard writer.status == .completed else {
             throw fixtureError("writer status \(writer.status.rawValue): \(writer.error?.localizedDescription ?? "?")")
         }
