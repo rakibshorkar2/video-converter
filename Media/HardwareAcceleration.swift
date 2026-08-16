@@ -6,6 +6,7 @@ import VideoToolbox
 enum HardwareAcceleration {
 
     static func encoderAvailable(codec: VideoCodecOption) -> Bool {
+        guard #available(iOS 17.4, *) else { return false }
         guard let codecType = videoCodecType(for: codec) else { return false }
         var encoder: VTCompressionSession?
         let status = VTCompressionSessionCreate(
@@ -62,7 +63,7 @@ enum HardwareAcceleration {
             allocator: nil,
             valueOut: &value
         )
-        return status == noErr && (value as? CFBoolean) == kCFBooleanTrue
+        return status == noErr && value === kCFBooleanTrue
     }
 
     private static func videoCodecType(for codec: VideoCodecOption) -> CMVideoCodecType? {
