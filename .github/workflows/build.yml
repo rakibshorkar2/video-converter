@@ -86,11 +86,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Upload app bundle
+      - name: Package IPA
+        run: |
+          cd build/Build/Products/Release-iphoneos
+          mkdir -p Payload
+          cp -R VideoConverter.app Payload/
+          zip -r -X VideoConverter.ipa Payload/
+          rm -rf Payload
+          ls -lh VideoConverter.ipa
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: VideoConverter-unsigned
-          path: build/Build/Products/Release-iphoneos/VideoConverter.app
+          name: VideoConverter-unsigned-ipa
+          path: build/Build/Products/Release-iphoneos/VideoConverter.ipa
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -101,8 +110,8 @@ jobs:
           BUILD="${{ steps.version.outputs.build_number }}"
           VERSION="${{ steps.version.outputs.version }}"
           cd build/Build/Products/Release-iphoneos
-          zip -r "VideoConverter-$VERSION.zip" VideoConverter.app
-          gh release create "$VERSION" "VideoConverter-$VERSION.zip" \
+          cp VideoConverter.ipa "VideoConverter-$VERSION.ipa"
+          gh release create "$VERSION" "VideoConverter-$VERSION.ipa" \
             --title "VideoConverter $VERSION (build $BUILD)" \
             --generate-notes
 
