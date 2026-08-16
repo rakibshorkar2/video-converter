@@ -25,10 +25,20 @@ jobs:
 
       - name: Select Xcode
         run: |
-          LATEST=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort | tail -1)
-          if [ -z "$LATEST" ]; then
-            LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1)
-          fi
+          LATEST=""
+          LATEST_NUM="0"
+          for d in /Applications/Xcode*.app; do
+            [ -d "$d" ] || continue
+            VER=$(defaults read "$d/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.0")
+            MAJ=${VER%%.*}
+            MIN=${VER#*.}; MIN=${MIN%%.*}
+            NUM=$((MAJ * 1000 + MIN))
+            if [ "$NUM" -gt "$LATEST_NUM" ]; then
+              LATEST="$d"; LATEST_NUM="$NUM"
+            fi
+          done
+          echo "Installed Xcodes: $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"
+          echo "Selected: $LATEST"
           sudo xcode-select -s "$LATEST"
           xcodebuild -version
 
