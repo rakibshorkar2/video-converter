@@ -36,7 +36,15 @@ enum L10n {
     static let engineAVFoundation = "AVFoundation"
     static let engineVideoToolbox = "VideoToolbox"
     static let engineFFmpeg = "FFmpeg"
+    static let engineExportSession = "Apple Export"
     static let engineAuto = "Auto"
+
+    // Engine selection reasons
+    static let planReasonPreference = "Preferred engine"
+    static let planReasonStreamCopy = "Lossless stream copy"
+    static let planReasonExport = "Apple export preset"
+    static let planReasonAVFoundation = "AVFoundation pipeline"
+    static let planReasonFFmpeg = "FFmpeg required"
 
     // Job status
     static let statusQueued = "Queued"
@@ -136,6 +144,10 @@ enum L10n {
     static let importingProgress = "Importing %d of %d…"
     static let errorFFmpegFailed = "FFmpeg conversion failed: %@"
     static let errorNativeEngineFailed = "Conversion failed: %@"
+    static let errorPipelineFailure = "The conversion pipeline failed: %@"
+    static let errorEngineStalled = "The conversion stalled and was stopped. Try again, or choose a different engine."
+    static let errorExportSessionFailed = "The Apple export failed: %@"
+    static let errorEncodeFailed = "Encoding failed: %@"
     static let errorValidationFailed = "Output validation failed: %@"
     static let errorFileAlreadyExists = "A file named \"%@\" already exists."
     static let errorThermalLimitReached = "The device became too hot, so the conversion was stopped to protect the hardware. It will work again when the device cools down."
@@ -159,8 +171,14 @@ enum L10n {
     static let errorValidationUnreadable = "the output file cannot be read"
     static let errorValidationDuration = "the output duration is invalid"
     static let errorValidationVideoTrack = "the output has no video track"
+    static let errorValidationVideoTrackCount = "the output has more than one video track"
     static let errorValidationAudioTrack = "the output has no audio track"
     static let errorValidationCodec = "the output codec is unexpected (expected %@, got %@)"
+    static let errorValidationResolution = "the output resolution is unexpected (expected %@, got %@)"
+    static let errorValidationFPS = "the output frame rate is unexpected (expected %@, got %@)"
+    static let errorValidationPlayable = "the output file is not playable"
+    static let errorValidationDurationMismatch = "the output duration does not match the source (source %@, output %@)"
+    static let errorValidationAudioCodec = "the output audio codec is unexpected (expected %@, got %@)"
 
     // Diagnostics
     static let diagnosticsEngineSelected = "Engine selected"

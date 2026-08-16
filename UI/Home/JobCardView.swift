@@ -43,6 +43,13 @@ struct JobCardView: View {
                         .lineLimit(3)
                 }
 
+                if let details = job.technicalDetails, job.status == .failed {
+                    Text(details)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                }
+
                 actionButtons
             }
         }

@@ -19,6 +19,10 @@ enum ConversionError: LocalizedError, Sendable {
     case importVerificationFailed
     case ffmpegFailed(String)
     case nativeEngineFailed(String)
+    case pipelineFailure(String)
+    case engineStalled(String)
+    case exportSessionFailed(String)
+    case encodeFailed(String)
     case validationFailed(String)
     case fileAlreadyExists(String)
     case thermalLimitReached
@@ -64,6 +68,14 @@ enum ConversionError: LocalizedError, Sendable {
             return String(format: L10n.errorFFmpegFailed, detail)
         case .nativeEngineFailed(let detail):
             return String(format: L10n.errorNativeEngineFailed, detail)
+        case .pipelineFailure(let detail):
+            return String(format: L10n.errorPipelineFailure, detail)
+        case .engineStalled:
+            return L10n.errorEngineStalled
+        case .exportSessionFailed(let detail):
+            return String(format: L10n.errorExportSessionFailed, detail)
+        case .encodeFailed(let detail):
+            return String(format: L10n.errorEncodeFailed, detail)
         case .validationFailed(let detail):
             return String(format: L10n.errorValidationFailed, detail)
         case .fileAlreadyExists(let name):
@@ -84,6 +96,10 @@ enum ConversionError: LocalizedError, Sendable {
         case .filesAccessFailed(let detail): return detail
         case .ffmpegFailed(let detail): return detail
         case .nativeEngineFailed(let detail): return detail
+        case .pipelineFailure(let detail): return detail
+        case .engineStalled(let detail): return detail
+        case .exportSessionFailed(let detail): return detail
+        case .encodeFailed(let detail): return detail
         case .validationFailed(let detail): return detail
         default: return nil
         }

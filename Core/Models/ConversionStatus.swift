@@ -40,6 +40,7 @@ enum ConversionStage: String, Codable, Sendable {
 
 enum EngineKind: String, Codable, Sendable {
     case streamCopy
+    case exportSession
     case avFoundation
     case videoToolbox
     case ffmpeg
@@ -47,6 +48,7 @@ enum EngineKind: String, Codable, Sendable {
     var displayName: String {
         switch self {
         case .streamCopy: return L10n.engineStreamCopy
+        case .exportSession: return L10n.engineExportSession
         case .avFoundation: return L10n.engineAVFoundation
         case .videoToolbox: return L10n.engineVideoToolbox
         case .ffmpeg: return L10n.engineFFmpeg

@@ -173,11 +173,18 @@ final class ConversionQueueManager {
             do {
                 try await self.run(job)
             } catch {
-                let cancellation = error as? ConversionError
-                if case .cancelled? = cancellation {
-                    self.finish(job, status: .cancelled, error: nil)
+                if self.pausedForBackground || job.status == .interrupted {
+                    self.finish(job, status: .interrupted, error: nil)
+                } else if let conversionError = error as? ConversionError {
+                    if case .cancelled = conversionError {
+                        self.finish(job, status: .cancelled, error: nil)
+                    } else if self.thermal.isCritical {
+                        self.finish(job, status: .interrupted, error: ConversionError.thermalLimitReached)
+                    } else {
+                        self.finish(job, status: .failed, error: error)
+                    }
                 } else if self.thermal.isCritical {
-                    self.finish(job, status: .failed, error: ConversionError.thermalLimitReached)
+                    self.finish(job, status: .interrupted, error: ConversionError.thermalLimitReached)
                 } else {
                     self.finish(job, status: .failed, error: error)
                 }
@@ -243,25 +250,64 @@ final class ConversionQueueManager {
             outputURL: tempOutput,
             sourceMetadata: metadata
         )
-        let engine = await ConversionEngineRouter.selectEngine(for: request)
+        let plan = await ConversionPlanner.plan(for: request)
+        guard plan.engine != nil else {
+            throw ConversionError.unsupportedCombination(plan.unsupportedReason ?? "unsupported configuration")
+        }
+
+        let watchdog = JobWatchdog(jobID: job.id, token: token)
+        defer { watchdog.stop() }
+
+        var engine = await ConversionEngineRouter.selectEngine(for: request)
         job.engine = engine.identifier
         job.status = .converting
 
         diagnostics.log(L10n.diagnosticsEngineSelected, engine: engine.identifier, detail: "\(metadata.videoTrack?.codecName ?? "?") → \(job.configuration.videoCodec.displayName)")
 
         let progressClosure: @Sendable (ConversionProgress) -> Void = { [thermal] progress in
+            watchdog.poke()
             Task { @MainActor in
                 job.stage = progress.stage
-                job.fraction = progress.fractionCompleted
+                if progress.fractionCompleted >= job.fraction || progress.fractionCompleted >= 1 {
+                    job.fraction = min(progress.fractionCompleted, 0.99)
+                }
                 job.speed = progress.speed
-                job.eta = progress.eta
+                if progress.speed > 0.05 {
+                    job.eta = progress.eta
+                } else {
+                    job.eta = nil
+                }
                 if thermal.isCritical {
                     token.cancel()
                 }
             }
         }
 
-        let result = try await engine.convert(request, progress: progressClosure, cancellation: token)
+        var result: ConversionResult
+        while true {
+            do {
+                result = try await runEngine(
+                    engine,
+                    request: request,
+                    token: token,
+                    progressClosure: progressClosure,
+                    watchdog: watchdog
+                )
+                break
+            } catch {
+                guard !watchdog.hasFired else {
+                    throw ConversionError.engineStalled(watchdog.fireDetail)
+                }
+                guard !token.isCancelled else {
+                    throw ConversionError.cancelled
+                }
+                guard let next = await ConversionEngineRouter.fallbackEngine(after: engine.identifier, for: request) else {
+                    throw error
+                }
+                engine = next
+                job.engine = next.identifier
+            }
+        }
         guard !token.isCancelled else { throw ConversionError.cancelled }
 
         job.outputURL = result.outputURL
@@ -270,7 +316,7 @@ final class ConversionQueueManager {
         job.status = .finalizing
         job.stage = .finalizing
         do {
-            try await OutputValidator.validate(url: tempOutput, source: metadata, configuration: job.configuration)
+            try await OutputValidator.validate(url: tempOutput, source: metadata, configuration: job.configuration, plan: plan)
         } catch {
             try? FileManager.default.removeItem(at: tempOutput)
             throw error
@@ -369,6 +415,33 @@ final class ConversionQueueManager {
         }
     }
 
+    private func runEngine(
+        _ engine: VideoConversionEngine,
+        request: ConversionRequest,
+        token: CancellationToken,
+        progressClosure: @escaping @Sendable (ConversionProgress) -> Void,
+        watchdog: JobWatchdog
+    ) async throws -> ConversionResult {
+        try await withThrowingTaskGroup(of: ConversionResult.self) { group in
+            group.addTask {
+                try await engine.convert(request, progress: progressClosure, cancellation: token)
+            }
+            group.addTask {
+                try await withTaskCancellationHandler {
+                    try await watchdog.awaitFire()
+                } onCancel: {
+                    watchdog.cancelWait()
+                }
+            }
+            guard let first = try await group.next() else {
+                throw ConversionError.engineStalled(watchdog.fireDetail)
+            }
+            group.cancelAll()
+            while let _ = try? await group.next() {}
+            return first
+        }
+    }
+
     private func finish(_ job: ConversionJob, status: JobStatus, error: Error?) {
         job.status = status
         job.stage = nil
@@ -396,5 +469,105 @@ final class ConversionQueueManager {
 
     private func persist() {
         JobStore.save(jobs)
+    }
+}
+
+private final class JobWatchdog: @unchecked Sendable {
+
+    private static let stallInterval: TimeInterval = 20
+    private static let graceInterval: TimeInterval = 6
+
+    private let lock = NSLock()
+    private let token: CancellationToken
+    private let jobID: UUID
+    private let timer: DispatchSourceTimer
+    private var lastPoke = Date()
+    private var stalledAt: Date?
+    private var firedFlag = false
+    private var detailText = ""
+    private var fireContinuation: CheckedContinuation<Void, Error>?
+
+    init(jobID: UUID, token: CancellationToken) {
+        self.jobID = jobID
+        self.token = token
+        let timer = DispatchSource.makeTimerSource(queue: MediaPump.pumpQueue)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        self.timer = timer
+        timer.setEventHandler { [weak self] in
+            self?.tick()
+        }
+        timer.resume()
+    }
+
+    var hasFired: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return firedFlag
+    }
+
+    var fireDetail: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return detailText
+    }
+
+    func poke() {
+        lock.lock()
+        lastPoke = Date()
+        stalledAt = nil
+        lock.unlock()
+    }
+
+    func stop() {
+        timer.cancel()
+    }
+
+    func awaitFire() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            if firedFlag {
+                let detail = detailText
+                lock.unlock()
+                continuation.resume(throwing: ConversionError.engineStalled(detail))
+                return
+            }
+            fireContinuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func cancelWait() {
+        lock.lock()
+        let continuation = fireContinuation
+        fireContinuation = nil
+        lock.unlock()
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    private func tick() {
+        lock.lock()
+        guard !firedFlag else {
+            lock.unlock()
+            return
+        }
+        let silence = Date().timeIntervalSince(lastPoke)
+        if silence >= Self.stallInterval {
+            if stalledAt == nil {
+                stalledAt = Date()
+                detailText = "no progress for \(Int(silence))s (job \(jobID.uuidString.prefix(8)))"
+            } else if Date().timeIntervalSince(stalledAt!) >= Self.graceInterval {
+                firedFlag = true
+                let detail = detailText
+                let continuation = fireContinuation
+                fireContinuation = nil
+                lock.unlock()
+                token.cancel()
+                continuation?.resume(throwing: ConversionError.engineStalled(detail))
+                return
+            }
+        } else {
+            stalledAt = nil
+        }
+        lock.unlock()
     }
 }

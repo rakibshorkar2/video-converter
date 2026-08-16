@@ -3,35 +3,25 @@ import AVFoundation
 
 enum ConversionEngineRouter {
 
+    static let priorityOrder: [EngineKind] = [.exportSession, .streamCopy, .avFoundation, .videoToolbox, .ffmpeg]
+
     static func selectEngine(for request: ConversionRequest) async -> VideoConversionEngine {
-        let config = request.configuration
-
-        switch config.enginePreference {
-        case .videoToolbox:
-            let engine = preferredEngine(.videoToolbox, for: request)
-            if await engine.canHandle(request) { return engine }
-        case .ffmpeg:
-            if FormatCapabilities.isFFmpegEnabled {
-                return FFmpegEngineFactory.make()
-            }
-        case .auto:
-            break
-        }
-
-        if config.streamCopy {
-            let engine = preferredEngine(.streamCopy, for: request)
-            if await engine.canHandle(request) { return engine }
-        }
-        let avFoundation = preferredEngine(.avFoundation, for: request)
-        if await avFoundation.canHandle(request) { return avFoundation }
-        if FormatCapabilities.isFFmpegEnabled {
-            return FFmpegEngineFactory.make()
-        }
-        return preferredEngine(.streamCopy, for: request)
+        let plan = await ConversionPlanner.plan(for: request)
+        return engine(for: plan)
     }
 
-    private static func preferredEngine(_ kind: EngineKind, for request: ConversionRequest) -> VideoConversionEngine {
-        ConversionEngineRouterFactory.make(kind)
+    static func engine(for plan: ConversionPlan) -> VideoConversionEngine {
+        guard let kind = plan.engine else { return UnsupportedPlanEngine(plan: plan) }
+        return ConversionEngineRouterFactory.make(kind)
+    }
+
+    static func fallbackEngine(after failedEngine: EngineKind, for request: ConversionRequest) async -> VideoConversionEngine? {
+        guard let index = priorityOrder.firstIndex(of: failedEngine) else { return nil }
+        for kind in priorityOrder.dropFirst(index + 1) {
+            let candidate = ConversionEngineRouterFactory.make(kind)
+            if await candidate.canHandle(request) { return candidate }
+        }
+        return nil
     }
 }
 
@@ -39,6 +29,7 @@ enum ConversionEngineRouterFactory {
     static func make(_ kind: EngineKind) -> VideoConversionEngine {
         switch kind {
         case .streamCopy: return StreamCopyEngineFactory.make()
+        case .exportSession: return ExportSessionEngineFactory.make()
         case .avFoundation: return AVFoundationEngineFactory.make()
         case .videoToolbox: return VideoToolboxEngineFactory.make()
         case .ffmpeg: return FFmpegEngineFactory.make()
@@ -48,6 +39,11 @@ enum ConversionEngineRouterFactory {
 
 private enum StreamCopyEngineFactory {
     static let shared = StreamCopyEngine()
+    static func make() -> VideoConversionEngine { shared }
+}
+
+private enum ExportSessionEngineFactory {
+    static let shared = ExportSessionEngine()
     static func make() -> VideoConversionEngine { shared }
 }
 
@@ -68,6 +64,25 @@ private enum FFmpegEngineFactory {
         #else
         return UnavailableFFmpegEngine()
         #endif
+    }
+}
+
+private final class UnsupportedPlanEngine: VideoConversionEngine {
+    let identifier = EngineKind.avFoundation
+    private let plan: ConversionPlan
+
+    init(plan: ConversionPlan) {
+        self.plan = plan
+    }
+
+    func canHandle(_ request: ConversionRequest) async -> Bool { false }
+
+    func convert(
+        _ request: ConversionRequest,
+        progress: @escaping @Sendable (ConversionProgress) -> Void,
+        cancellation: CancellationToken
+    ) async throws -> ConversionResult {
+        throw ConversionError.unsupportedCombination(plan.unsupportedReason ?? "unsupported configuration")
     }
 }
 

@@ -44,6 +44,7 @@ final class CancellationToken: @unchecked Sendable {
 final class ProgressThrottler: @unchecked Sendable {
     private let lock = NSLock()
     private var lastEmit = Date.distantPast
+    private var lastFraction = 0.0
     private let start = Date()
 
     func report(processed: Double, duration: Double, stage: ConversionStage, progress: (@Sendable (ConversionProgress) -> Void)?) {
@@ -58,11 +59,13 @@ final class ProgressThrottler: @unchecked Sendable {
         } else {
             shouldEmit = false
         }
+        let rawFraction = duration > 0 ? min(max(processed / duration, 0), 1) : 0
+        let fraction = max(rawFraction, lastFraction)
+        lastFraction = fraction
         lock.unlock()
         guard shouldEmit else { return }
         let speed = elapsed > 0 ? processed / elapsed : 0
         let eta = speed > 0.0001 ? (duration - processed) / speed : 0
-        let fraction = duration > 0 ? min(max(processed / duration, 0), 1) : 0
         progress(ConversionProgress(
             stage: stage,
             fractionCompleted: fraction,

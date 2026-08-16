@@ -12,6 +12,11 @@ final class AVFoundationEngine: VideoConversionEngine {
         guard AVFileType(container: config.outputContainer) != nil else { return false }
         guard config.videoCodec == .h264 || config.videoCodec == .hevc else { return false }
         guard FormatCapabilities.audioCodecEncodable(config.audioCodec) else { return false }
+        if config.audioCodec == .copy {
+            for audio in request.sourceMetadata.audioTracks {
+                guard FormatCapabilities.audioCopyable(to: config.outputContainer, codecType: audio.codecType) else { return false }
+            }
+        }
         return true
     }
 
@@ -182,28 +187,49 @@ final class AVFoundationEngine: VideoConversionEngine {
             throw ConversionError.nativeEngineFailed(reader.error?.localizedDescription ?? L10n.errorReaderStart)
         }
         writer.startWriting()
-        writer.startSession(atSourceTime: .zero)
+        guard writer.status == .writing else {
+            reader.cancelReading()
+            throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
+        }
+        guard writer.startSession(atSourceTime: .zero) else {
+            writer.cancelWriting()
+            reader.cancelReading()
+            throw ConversionError.nativeEngineFailed(L10n.errorWriterFailed)
+        }
 
         do {
-            try await MediaPump.run(
-                output: readerVideoOutput,
-                input: writerVideoInput,
-                duration: duration,
-                stage: .encoding,
-                progress: progress,
-                cancellation: cancellation,
-                throttle: throttle
-            )
-            for (output, input) in audioPairs {
-                try await MediaPump.run(
-                    output: output,
-                    input: input,
-                    duration: duration,
-                    stage: .encoding,
-                    progress: progress,
-                    cancellation: cancellation,
-                    throttle: throttle
-                )
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await MediaPump.run(
+                        reader: reader,
+                        writer: writer,
+                        output: readerVideoOutput,
+                        input: writerVideoInput,
+                        duration: duration,
+                        stage: .encoding,
+                        mediaName: request.sourceURL.lastPathComponent,
+                        progress: progress,
+                        cancellation: cancellation,
+                        throttle: throttle
+                    )
+                }
+                for (output, input) in audioPairs {
+                    group.addTask {
+                        try await MediaPump.run(
+                            reader: reader,
+                            writer: writer,
+                            output: output,
+                            input: input,
+                            duration: duration,
+                            stage: .encoding,
+                            mediaName: request.sourceURL.lastPathComponent,
+                            progress: progress,
+                            cancellation: cancellation,
+                            throttle: throttle
+                        )
+                    }
+                }
+                try await group.waitForAll()
             }
             guard !cancellation.isCancelled else { throw ConversionError.cancelled }
             try await writer.finishWriting()

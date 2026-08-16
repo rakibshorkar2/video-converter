@@ -9,7 +9,8 @@
 #   ./Scripts/build_ffmpeg_ios.sh --clean  # rebuild from scratch
 #
 # Requirements: macOS with Xcode, autotools toolchain (brew install automake
-# autoconf libtool pkg-config yasm).
+# autoconf libtool pkg-config yasm) plus the external codec libraries:
+#   brew install x264 x265 lame opus libvpx aom
 #
 # Outputs:
 #   Vendor/ffmpeg-ios/universal/...  static libs (one per FFmpeg lib)
@@ -40,21 +41,28 @@ CONFIG_FLAGS_COMMON=(
   --disable-network
   --disable-autodetect
   --enable-small
+  --enable-gpl
   --enable-avcodec
   --enable-avformat
   --enable-swresample
   --enable-swscale
-  --enable-encoder=h264
-  --enable-encoder=hevc
+  --enable-libx264
+  --enable-encoder=libx264
+  --enable-libx265
+  --enable-encoder=libx265
+  --enable-libvpx
   --enable-encoder=vp8
   --enable-encoder=vp9
-  --enable-encoder=av1
+  --enable-libaom
+  --enable-encoder=libaom-av1
   --enable-encoder=mpeg4
   --enable-encoder=aac
   --enable-encoder=alac
   --enable-encoder=flac
-  --enable-encoder=mp3
-  --enable-encoder=opus
+  --enable-libmp3lame
+  --enable-encoder=libmp3lame
+  --enable-libopus
+  --enable-encoder=libopus
   --enable-encoder=pcm_s16le
   --enable-decoder=h264
   --enable-decoder=hevc
@@ -127,8 +135,9 @@ DEPLOYMENT_TARGET="17.0"
 build_arch() {
   local arch="$1"
   local sdk="$2"
-  local build_dir="$SOURCE_DIR/build-$arch"
-  echo "==> Building $arch"
+  local label="$3"
+  local build_dir="$SOURCE_DIR/build-$arch-$label"
+  echo "==> Building $arch ($label)"
   rm -rf "$build_dir"
   mkdir -p "$build_dir"
   pushd "$SOURCE_DIR" >/dev/null
@@ -138,7 +147,7 @@ build_arch() {
     --arch="$arch" \
     --target-os=darwin \
     --sysroot="$sdk" \
-    --extra-cflags="-arch $arch -miphoneos-version-min=$DEPLOYMENT_TARGET -fembed-bitcode" \
+    --extra-cflags="-arch $arch -miphoneos-version-min=$DEPLOYMENT_TARGET" \
     --extra-ldflags="-arch $arch -miphoneos-version-min=$DEPLOYMENT_TARGET" \
     "${CONFIG_FLAGS_COMMON[@]}"
   make -j"$(sysctl -n hw.ncpu)"
@@ -148,16 +157,19 @@ build_arch() {
 
 ARCHS=()
 SDKS=()
+LABELS=()
 if [ -n "${IOS_PLATFORM:-}" ] && [ "$IOS_PLATFORM" == "SIMULATOR" ]; then
   ARCHS=("arm64")
   SDKS=("$SDK_SIM")
+  LABELS=("iphonesimulator")
 else
   ARCHS=("arm64" "arm64")
   SDKS=("$SDK_DEVICE" "$SDK_SIM")
+  LABELS=("iphoneos" "iphonesimulator")
 fi
 
 for i in "${!ARCHS[@]}"; do
-  build_arch "${ARCHS[$i]}" "${SDKS[$i]}"
+  build_arch "${ARCHS[$i]}" "${SDKS[$i]}" "${LABELS[$i]}"
 done
 
 echo "==> Creating universal libraries"
@@ -172,12 +184,12 @@ rm -rf "$OUTPUT_DIR/universal" "$OUTPUT_DIR/include"
 mkdir -p "$OUTPUT_DIR/universal"
 for lib in "${LIB_NAMES[@]}"; do
   LIBS=()
-  for arch in "${ARCHS[@]}"; do
-    LIBS+=("$SOURCE_DIR/build-$arch/install/lib/$lib")
+  for i in "${!ARCHS[@]}"; do
+    LIBS+=("$SOURCE_DIR/build-${ARCHS[$i]}-${LABELS[$i]}/install/lib/$lib")
   done
   xcrun lipo -create "${LIBS[@]}" -output "$OUTPUT_DIR/universal/$lib"
 done
-cp -R "$SOURCE_DIR/build-arm64/install/include" "$OUTPUT_DIR/include"
+cp -R "$SOURCE_DIR/build-arm64-iphoneos/install/include" "$OUTPUT_DIR/include"
 
 echo "==> Writing $CONFIG_PATH"
 cat > "$CONFIG_PATH" <<EOF
@@ -185,7 +197,8 @@ FFMPEG_ENABLED = 1
 GCC_PREPROCESSOR_DEFINITIONS = \$(inherited) FFMPEG_ENABLED=1
 SWIFT_ACTIVE_COMPILATION_CONDITIONS = \$(inherited) FFMPEG_ENABLED
 HEADER_SEARCH_PATHS = \$(inherited) \$(SRCROOT)/Vendor/ffmpeg-ios/include
-LIBRARY_SEARCH_PATHS = \$(inherited) \$(SRCROOT)/Vendor/ffmpeg-ios/universal
+LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = \$(inherited) \$(SRCROOT)/Vendor/ffmpeg-ios/universal
+LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = \$(inherited) \$(SRCROOT)/Vendor/ffmpeg-ios/universal
 OTHER_LDFLAGS = \$(inherited) -lavformat -lavcodec -lswresample -lswscale -lavutil -lz -lbz2 -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework AudioToolbox -framework Security
 EOF
 

@@ -11,6 +11,7 @@ struct ConversionSettingsView: View {
     @State private var sourceMetadata: MediaMetadata?
     @State private var showingFolderPicker = false
     @State private var analyzeFailed = false
+    @State private var compatibilityMessage: String?
 
     init(job: ConversionJob) {
         self.job = job
@@ -63,6 +64,9 @@ struct ConversionSettingsView: View {
                 }
             }
             .task { await loadMetadata() }
+            .onChange(of: configuration) { _, _ in
+                Task { await refreshCompatibility() }
+            }
             .sheet(isPresented: $showingFolderPicker) {
                 FolderPicker { url in
                     saveFolder(url)
@@ -321,27 +325,23 @@ struct ConversionSettingsView: View {
         return options
     }
 
-    private var compatibilityMessage: String? {
-        guard let metadata = sourceMetadata else { return nil }
-        if configuration.streamCopy {
-            guard FormatCapabilities.canStreamCopy(source: metadata, to: configuration.outputContainer) else {
-                return String(format: L10n.errorStreamCopyIncompatible, configuration.outputContainer.displayName)
-            }
-            return nil
+    private func refreshCompatibility() async {
+        guard let url = job.sourceURL, let metadata = sourceMetadata else {
+            compatibilityMessage = nil
+            return
         }
-        if !FormatCapabilities.containerSupportsVideoCodec(configuration.outputContainer, codec: configuration.videoCodec) {
-            return String(format: L10n.errorUnsupportedCombination, "\(configuration.outputContainer.displayName) + \(configuration.videoCodec.displayName)")
+        let request = ConversionRequest(
+            sourceURL: url,
+            configuration: configuration,
+            outputURL: url,
+            sourceMetadata: metadata
+        )
+        let plan = await ConversionPlanner.plan(for: request)
+        if let reason = plan.unsupportedReason {
+            compatibilityMessage = String(format: L10n.errorUnsupportedCombination, reason)
+        } else {
+            compatibilityMessage = nil
         }
-        if !FormatCapabilities.containerSupportsAudioCodec(configuration.outputContainer, codec: configuration.audioCodec) {
-            return String(format: L10n.errorUnsupportedCombination, "\(configuration.outputContainer.displayName) + \(configuration.audioCodec.displayName)")
-        }
-        if !FormatCapabilities.videoCodecEncodable(configuration.videoCodec) {
-            return L10n.requiresFFmpegNote
-        }
-        if !FormatCapabilities.audioCodecEncodable(configuration.audioCodec) {
-            return L10n.requiresFFmpegNote
-        }
-        return nil
     }
 
     private var showHDRWarning: Bool {
@@ -394,6 +394,7 @@ struct ConversionSettingsView: View {
     private func loadMetadata() async {
         if let metadata = job.metadata {
             sourceMetadata = metadata
+            await refreshCompatibility()
             return
         }
         guard let url = job.sourceURL else {
@@ -402,11 +403,13 @@ struct ConversionSettingsView: View {
         }
         do {
             sourceMetadata = try await MediaAnalyzer.analyze(url: url)
+            await refreshCompatibility()
         } catch {
             #if FFMPEG_ENABLED
             if let result = await FFmpegEngine.analyze(url: url) {
                 sourceMetadata = result.metadata
                 job.metadata = result.metadata
+                await refreshCompatibility()
                 return
             }
             #endif

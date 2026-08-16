@@ -99,6 +99,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build-for-testing
 
+      - name: Run unit tests
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available | grep -E 'iPhone' | head -n 1 | grep -oE '[0-9A-F-]{36}' | head -n 1)
+          echo "Using simulator: $DEVICE_ID"
+          xcodebuild \
+            -project VideoConverter.xcodeproj \
+            -scheme VideoConverter \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath build-tests \
+            CODE_SIGNING_ALLOWED=NO \
+            test-without-building
+
       - name: Package IPA
         run: |
           cd build/Build/Products/Release-iphoneos

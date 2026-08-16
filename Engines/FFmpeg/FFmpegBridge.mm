@@ -110,8 +110,9 @@ int openEncoder(EncState &s, const FFpegConversionOptions *options, const AVCode
     const char *name = nullptr;
     if (s.isVideo) {
         switch (options->videoCodecId) {
-            case 0: name = "h264"; break;
-            case 1: name = "hevc"; break;
+            /* Native h264/hevc encoders were removed in FFmpeg 5+; use libx264/libx265. */
+            case 0: name = "libx264"; break;
+            case 1: name = "libx265"; break;
             case 2: name = "libvpx-vp9"; break;
             case 3: name = "libaom-av1"; break;
             case 4: name = "mpeg4"; break;
@@ -121,9 +122,9 @@ int openEncoder(EncState &s, const FFpegConversionOptions *options, const AVCode
     } else if (s.isAudio) {
         switch (options->audioCodecId) {
             case 0: name = "aac"; break;
-            case 1: name = "opus"; break;
+            case 1: name = "libopus"; break;
             case 2: name = "flac"; break;
-            case 3: name = "mp3"; break;
+            case 3: name = "libmp3lame"; break;
             case 4: name = "pcm_s16le"; break;
             case 5: name = "alac"; break;
             default: error = "unsupported audio encoder"; return AVERROR(EINVAL);

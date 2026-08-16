@@ -6,14 +6,13 @@ import VideoToolbox
 final class VideoToolboxEngine: VideoConversionEngine {
     let identifier = EngineKind.videoToolbox
 
-    private let pipelineQueue = DispatchQueue(label: "com.videoconverter.vt.pipeline", qos: .userInitiated)
-    private let appendQueue = DispatchQueue(label: "com.videoconverter.vt.append", qos: .userInitiated)
-
     func canHandle(_ request: ConversionRequest) async -> Bool {
         let config = request.configuration
+        guard config.enginePreference == .videoToolbox else { return false }
         guard !config.streamCopy else { return false }
         guard AVFileType(container: config.outputContainer) != nil else { return false }
         guard config.videoCodec == .h264 || config.videoCodec == .hevc else { return false }
+        guard FormatCapabilities.audioCodecEncodable(config.audioCodec) else { return false }
         if let src = request.sourceMetadata.videoTrack {
             let sourceSize = CGSize(width: src.naturalWidth, height: src.naturalHeight)
             let target = config.resolution.resolvedSize(for: sourceSize)
@@ -111,7 +110,15 @@ final class VideoToolboxEngine: VideoConversionEngine {
             throw ConversionError.nativeEngineFailed(reader.error?.localizedDescription ?? L10n.errorReaderStart)
         }
         writer.startWriting()
-        writer.startSession(atSourceTime: .zero)
+        guard writer.status == .writing else {
+            reader.cancelReading()
+            throw ConversionError.nativeEngineFailed(writer.error?.localizedDescription ?? L10n.errorWriterFailed)
+        }
+        guard writer.startSession(atSourceTime: .zero) else {
+            writer.cancelWriting()
+            reader.cancelReading()
+            throw ConversionError.nativeEngineFailed(L10n.errorWriterFailed)
+        }
 
         let preserveHDR = config.preserveHDR && sourceVideo?.isHDR == true && config.videoCodec == .hevc
         let pixelFormat: OSType = preserveHDR
@@ -119,160 +126,57 @@ final class VideoToolboxEngine: VideoConversionEngine {
             : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         let outputCodec = config.videoCodec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
 
-        var decoder: VTDecompressionSession?
-        var decoderSpec: [String: Any] = [:]
-        if config.hardwareAcceleration {
-            decoderSpec[kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String] = true
-        }
-        let imageBufferAttrs: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
-        let decodeStatus = VTDecompressionSessionCreate(
-            allocator: nil,
-            formatDescription: sourceFormatDescription,
-            decoderSpecification: decoderSpec as CFDictionary,
-            imageBufferAttributes: imageBufferAttrs as CFDictionary,
-            outputCallback: nil,
-            decompressionSessionOut: &decoder
+        let decoder = try makeDecoder(
+            sourceFormatDescription: sourceFormatDescription,
+            pixelFormat: pixelFormat,
+            hardwareRequested: config.hardwareAcceleration
         )
-        guard decodeStatus == noErr, let decoder else {
-            writer.cancelWriting()
-            reader.cancelReading()
-            throw ConversionError.engineUnavailable(L10n.errorDecoderUnavailable)
-        }
-        defer { VTDecompressionSessionInvalidate(decoder) }
-
-        var encoder: VTCompressionSession?
-        var encoderSpec: [String: Any] = [:]
-        if config.hardwareAcceleration {
-            if #available(iOS 17.4, *) {
-                encoderSpec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
-                encoderSpec[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String] = true
-            } else {
-                encoderSpec["EnableHardwareAcceleratedVideoEncoder"] = true
-                encoderSpec["RequireHardwareAcceleratedVideoEncoder"] = true
-            }
-        }
-        let encodeStatus = VTCompressionSessionCreate(
-            allocator: nil,
+        let encoder = try makeEncoder(
             width: Int32(max(naturalSize.width, 16)),
             height: Int32(max(naturalSize.height, 16)),
             codecType: outputCodec,
-            encoderSpecification: encoderSpec as CFDictionary,
-            imageBufferAttributes: nil,
-            compressedDataAllocator: nil,
-            outputCallback: nil,
-            refcon: nil,
-            compressionSessionOut: &encoder
+            hardwareRequested: config.hardwareAcceleration
         )
-        guard encodeStatus == noErr, let encoder else {
-            writer.cancelWriting()
-            reader.cancelReading()
-            throw ConversionError.hardwareEncoderUnavailable
-        }
+        defer { VTDecompressionSessionInvalidate(decoder) }
         defer { VTCompressionSessionInvalidate(encoder) }
+        let encoderUsesHardware = HardwareAcceleration.encoderUsesHardware(encoder)
 
-        let profile = config.videoCodec == .hevc
-            ? (preserveHDR ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel)
-            : kVTProfileLevel_H264_High_AutoLevel
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: profile as CFString)
-        if let bitrate = SizeEstimator.suggestedVideoBitrate(config: config, source: request.sourceMetadata) {
-            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrate))
-        }
-        if let fps = config.frameRate.resolvedValue(original: nominalFPS) {
-            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
-            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: NSNumber(value: Int(fps * 2)))
-        }
-        if preserveHDR, let sv = sourceVideo {
-            if let p = sv.colorPrimaries { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ColorPrimaries, value: p as CFString) }
-            if let t = sv.transferFunction { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_TransferFunction, value: t as CFString) }
-            if let m = sv.matrix { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_YCbCrMatrix, value: m as CFString) }
-        }
-
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            pipelineQueue.async {
-                let appendGroup = DispatchGroup()
-                var pipelineError: Error?
-
-                func fail(_ error: Error) {
-                    if pipelineError == nil { pipelineError = error }
-                }
-
-                VTCompressionSessionPrepareToEncodeFrames(encoder)
-
-                while !cancellation.isCancelled {
-                    guard let sampleBuffer = readerVideoOutput.copyNextSampleBuffer() else {
-                        break
-                    }
-                    let decodeResult = VTDecompressionSessionDecodeFrame(
-                        decoder,
-                        sampleBuffer: sampleBuffer,
-                        flags: [],
-                        infoFlagsOut: nil
-                    ) { status, _, imageBuffer, pts, frameDuration in
-                        guard status == noErr, let imageBuffer else {
-                            fail(ConversionError.nativeEngineFailed(L10n.errorDecodeFailed))
-                            return
-                        }
-                        appendGroup.enter()
-                        let encodeStatus = VTCompressionSessionEncodeFrame(
-                            encoder,
-                            imageBuffer: imageBuffer,
-                            presentationTimeStamp: pts,
-                            duration: frameDuration,
-                            frameProperties: nil,
-                            infoFlagsOut: nil
-                        ) { encStatus, _, encodedSampleBuffer in
-                            self.appendQueue.async {
-                                if encStatus == noErr, let encodedSampleBuffer {
-                                    writerVideoInput.append(encodedSampleBuffer)
-                                } else {
-                                    fail(ConversionError.hardwareEncoderUnavailable)
-                                }
-                                appendGroup.leave()
-                            }
-                        }
-                        if encodeStatus != noErr {
-                            fail(ConversionError.hardwareEncoderUnavailable)
-                            appendGroup.leave()
-                        }
-                        if pts.isNumeric, duration.isNumeric, duration.seconds > 0 {
-                            throttle.report(processed: pts.seconds, duration: duration.seconds, stage: .encoding, progress: progress)
-                        }
-                    }
-                    if decodeResult != noErr {
-                        fail(ConversionError.nativeEngineFailed(L10n.errorDecodeFailed))
-                        break
-                    }
-                }
-
-                if pipelineError == nil && !cancellation.isCancelled {
-                    VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
-                    appendGroup.wait()
-                }
-
-                if cancellation.isCancelled {
-                    cont.resume(throwing: ConversionError.cancelled)
-                    return
-                }
-                if let pipelineError {
-                    cont.resume(throwing: pipelineError)
-                    return
-                }
-                writerVideoInput.markAsFinished()
-                cont.resume(returning: ())
-            }
-        }
+        configureEncoder(encoder, config: config, source: request.sourceMetadata, nominalFPS: nominalFPS, preserveHDR: preserveHDR, sourceVideo: sourceVideo)
 
         do {
-            for (output, input) in audioPairs {
-                try await MediaPump.run(
-                    output: output,
-                    input: input,
-                    duration: duration,
-                    stage: .encoding,
-                    progress: progress,
-                    cancellation: cancellation,
-                    throttle: throttle
-                )
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await VTPipelineDriver.run(
+                        reader: reader,
+                        writer: writer,
+                        readerOutput: readerVideoOutput,
+                        writerInput: writerVideoInput,
+                        decoder: decoder,
+                        encoder: encoder,
+                        duration: duration,
+                        mediaName: request.sourceURL.lastPathComponent,
+                        progress: progress,
+                        cancellation: cancellation,
+                        throttle: throttle
+                    )
+                }
+                for (output, input) in audioPairs {
+                    group.addTask {
+                        try await MediaPump.run(
+                            reader: reader,
+                            writer: writer,
+                            output: output,
+                            input: input,
+                            duration: duration,
+                            stage: .encoding,
+                            mediaName: request.sourceURL.lastPathComponent,
+                            progress: progress,
+                            cancellation: cancellation,
+                            throttle: throttle
+                        )
+                    }
+                }
+                try await group.waitForAll()
             }
             guard !cancellation.isCancelled else { throw ConversionError.cancelled }
             try await writer.finishWriting()
@@ -291,10 +195,126 @@ final class VideoToolboxEngine: VideoConversionEngine {
             outputURL: request.outputURL,
             engine: .videoToolbox,
             usedStreamCopy: false,
-            usedHardwareAcceleration: true,
+            usedHardwareAcceleration: encoderUsesHardware,
             duration: duration.seconds,
             outputSize: FileStorageManager.fileSize(at: request.outputURL)
         )
+    }
+
+    private func makeDecoder(
+        sourceFormatDescription: CMFormatDescription,
+        pixelFormat: OSType,
+        hardwareRequested: Bool
+    ) throws -> VTDecompressionSession {
+        let imageBufferAttrs: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
+        if hardwareRequested {
+            var decoderSpec: [String: Any] = [:]
+            if #available(iOS 17.4, *) {
+                decoderSpec[kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String] = true
+            } else {
+                decoderSpec["EnableHardwareAcceleratedVideoDecoder"] = true
+            }
+            var decoder: VTDecompressionSession?
+            let status = VTDecompressionSessionCreate(
+                allocator: nil,
+                formatDescription: sourceFormatDescription,
+                decoderSpecification: decoderSpec as CFDictionary,
+                imageBufferAttributes: imageBufferAttrs as CFDictionary,
+                outputCallback: nil,
+                decompressionSessionOut: &decoder
+            )
+            if status == noErr, let decoder {
+                return decoder
+            }
+        }
+        var decoder: VTDecompressionSession?
+        let status = VTDecompressionSessionCreate(
+            allocator: nil,
+            formatDescription: sourceFormatDescription,
+            decoderSpecification: nil,
+            imageBufferAttributes: imageBufferAttrs as CFDictionary,
+            outputCallback: nil,
+            decompressionSessionOut: &decoder
+        )
+        guard status == noErr, let decoder else {
+            throw ConversionError.engineUnavailable(L10n.errorDecoderUnavailable)
+        }
+        return decoder
+    }
+
+    private func makeEncoder(
+        width: Int32,
+        height: Int32,
+        codecType: CMVideoCodecType,
+        hardwareRequested: Bool
+    ) throws -> VTCompressionSession {
+        if hardwareRequested {
+            var encoderSpec: [String: Any] = [:]
+            if #available(iOS 17.4, *) {
+                encoderSpec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
+            } else {
+                encoderSpec["EnableHardwareAcceleratedVideoEncoder"] = true
+            }
+            var encoder: VTCompressionSession?
+            let status = VTCompressionSessionCreate(
+                allocator: nil,
+                width: width,
+                height: height,
+                codecType: codecType,
+                encoderSpecification: encoderSpec as CFDictionary,
+                imageBufferAttributes: nil,
+                compressedDataAllocator: nil,
+                outputCallback: nil,
+                refcon: nil,
+                compressionSessionOut: &encoder
+            )
+            if status == noErr, let encoder {
+                return encoder
+            }
+        }
+        var encoder: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: nil,
+            width: width,
+            height: height,
+            codecType: codecType,
+            encoderSpecification: nil,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &encoder
+        )
+        guard status == noErr, let encoder else {
+            throw ConversionError.hardwareEncoderUnavailable
+        }
+        return encoder
+    }
+
+    private func configureEncoder(
+        _ encoder: VTCompressionSession,
+        config: ConversionConfiguration,
+        source: MediaMetadata,
+        nominalFPS: Double,
+        preserveHDR: Bool,
+        sourceVideo: VideoTrackInfo?
+    ) {
+        let profile = config.videoCodec == .hevc
+            ? (preserveHDR ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel)
+            : kVTProfileLevel_H264_High_AutoLevel
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: profile as CFString)
+        if let bitrate = SizeEstimator.suggestedVideoBitrate(config: config, source: source) {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrate))
+        }
+        if let fps = config.frameRate.resolvedValue(original: nominalFPS) {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: NSNumber(value: Int(fps * 2)))
+        }
+        if preserveHDR, let sv = sourceVideo {
+            if let p = sv.colorPrimaries { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ColorPrimaries, value: p as CFString) }
+            if let t = sv.transferFunction { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_TransferFunction, value: t as CFString) }
+            if let m = sv.matrix { VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_YCbCrMatrix, value: m as CFString) }
+        }
     }
 
     private func selectedAudioTracks(_ tracks: [AVAssetTrack], selection: AudioTrackSelection, audioCodec: AudioCodecOption) -> [AVAssetTrack] {
@@ -304,5 +324,288 @@ final class VideoToolboxEngine: VideoConversionEngine {
         case .first: return Array(tracks.prefix(1))
         case .none: return []
         }
+    }
+}
+
+private final class VTPipelineDriver: @unchecked Sendable {
+
+    private static let maxBufferedSamples = 12
+    private static let stallInterval: TimeInterval = 20
+
+    private let reader: AVAssetReader
+    private let writer: AVAssetWriter
+    private let readerOutput: AVAssetReaderOutput
+    private let writerInput: AVAssetWriterInput
+    private let decoder: VTDecompressionSession
+    private let encoder: VTCompressionSession
+    private let duration: CMTime
+    private let mediaName: String
+    private let progress: (@Sendable (ConversionProgress) -> Void)?
+    private let cancellation: CancellationToken
+    private let throttle: ProgressThrottler
+    private let continuation: CheckedContinuation<Void, Error>
+
+    private let lock = NSLock()
+    private var finished = false
+    private var finalizing = false
+    private var pipelineError: Error?
+    private var sampleQueue: [CMSampleBuffer] = []
+    private var decodeInFlight = false
+    private var producerDone = false
+    private var decodeCompleted = 0
+    private var lastActivity = Date()
+    private var watchdog: DispatchSourceTimer?
+    private let capacity = DispatchSemaphore(value: VTPipelineDriver.maxBufferedSamples)
+
+    static func run(
+        reader: AVAssetReader,
+        writer: AVAssetWriter,
+        readerOutput: AVAssetReaderOutput,
+        writerInput: AVAssetWriterInput,
+        decoder: VTDecompressionSession,
+        encoder: VTCompressionSession,
+        duration: CMTime,
+        mediaName: String,
+        progress: (@Sendable (ConversionProgress) -> Void)?,
+        cancellation: CancellationToken,
+        throttle: ProgressThrottler
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let driver = VTPipelineDriver(
+                reader: reader,
+                writer: writer,
+                readerOutput: readerOutput,
+                writerInput: writerInput,
+                decoder: decoder,
+                encoder: encoder,
+                duration: duration,
+                mediaName: mediaName,
+                progress: progress,
+                cancellation: cancellation,
+                throttle: throttle,
+                continuation: continuation
+            )
+            driver.start()
+        }
+    }
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: MediaPump.pumpQueue)
+        timer.schedule(deadline: .now() + Self.stallInterval, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            self?.watchdogTick()
+        }
+        lock.lock()
+        watchdog = timer
+        lock.unlock()
+        timer.resume()
+        MediaPump.pumpQueue.async { [weak self] in
+            self?.produce()
+        }
+    }
+
+    private func produce() {
+        while !isFinished {
+            if cancellation.isCancelled {
+                fail(.cancelled)
+                return
+            }
+            if capacity.wait(timeout: .now() + 1) == .timedOut {
+                if isFinished { return }
+                continue
+            }
+            guard let sample = readerOutput.copyNextSampleBuffer() else {
+                handleReaderExhausted()
+                return
+            }
+            lock.lock()
+            sampleQueue.append(sample)
+            lastActivity = Date()
+            let shouldKick = !decodeInFlight
+            lock.unlock()
+            if shouldKick {
+                kickDecode()
+            }
+        }
+    }
+
+    private func handleReaderExhausted() {
+        switch reader.status {
+        case .completed:
+            lock.lock()
+            producerDone = true
+            lock.unlock()
+            kickDecode()
+            maybeFinish()
+        case .failed:
+            fail(.pipelineFailure("\(mediaName): reader failed: \(reader.error?.localizedDescription ?? "unknown")"))
+        case .cancelled:
+            fail(.cancelled)
+        case .unknown, .reading:
+            var attempts = 0
+            while !isFinished {
+                attempts += 1
+                if attempts > 100 {
+                    fail(.pipelineFailure("\(mediaName): reader did not complete (status \(reader.status.rawValue))"))
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+                switch reader.status {
+                case .completed:
+                    lock.lock()
+                    producerDone = true
+                    lock.unlock()
+                    kickDecode()
+                    maybeFinish()
+                    return
+                case .failed:
+                    fail(.pipelineFailure("\(mediaName): reader failed: \(reader.error?.localizedDescription ?? "unknown")"))
+                    return
+                case .cancelled:
+                    fail(.cancelled)
+                    return
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func kickDecode() {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        if finalizing || decodeInFlight || sampleQueue.isEmpty {
+            lock.unlock()
+            maybeFinish()
+            return
+        }
+        decodeInFlight = true
+        let sample = sampleQueue.removeFirst()
+        lock.unlock()
+
+        let decodeResult = VTDecompressionSessionDecodeFrame(
+            decoder,
+            sampleBuffer: sample,
+            flags: [],
+            infoFlagsOut: nil
+        ) { [weak self] status, _, imageBuffer, pts, frameDuration in
+            guard let self else { return }
+            guard status == noErr, let imageBuffer else {
+                self.fail(.encodeFailed(L10n.errorDecodeFailed))
+                return
+            }
+            let encodeResult = VTCompressionSessionEncodeFrame(
+                self.encoder,
+                imageBuffer: imageBuffer,
+                presentationTimeStamp: pts,
+                duration: frameDuration,
+                frameProperties: nil,
+                infoFlagsOut: nil
+            ) { [weak self] encStatus, _, encodedBuffer in
+                guard let self else { return }
+                if encStatus == noErr, let encodedBuffer {
+                    self.appendEncoded(encodedBuffer)
+                } else {
+                    self.fail(.encodeFailed(L10n.errorEncodeFailed))
+                }
+            }
+            if encodeResult != noErr {
+                self.fail(.encodeFailed(L10n.errorEncodeFailed))
+                return
+            }
+            if pts.isNumeric, self.duration.isNumeric, self.duration.seconds > 0 {
+                self.throttle.report(
+                    processed: pts.seconds,
+                    duration: self.duration.seconds,
+                    stage: .encoding,
+                    progress: self.progress
+                )
+            }
+        }
+        if decodeResult != noErr {
+            fail(.encodeFailed(L10n.errorDecodeFailed))
+        }
+    }
+
+    private func appendEncoded(_ buffer: CMSampleBuffer) {
+        guard !isFinished else { return }
+        guard writerInput.append(buffer) else {
+            fail(.pipelineFailure("\(mediaName): writer append rejected after \(decodeCompleted) frames; writer status \(writer.status.rawValue), writer error \(writer.error?.localizedDescription ?? "none")"))
+            return
+        }
+        lock.lock()
+        decodeCompleted += 1
+        lastActivity = Date()
+        let isFinalizing = finalizing
+        lock.unlock()
+        capacity.signal()
+        if !isFinalizing {
+            kickDecode()
+        }
+    }
+
+    private func maybeFinish() {
+        lock.lock()
+        guard !finished, !finalizing, producerDone, sampleQueue.isEmpty, !decodeInFlight else {
+            lock.unlock()
+            return
+        }
+        finalizing = true
+        lock.unlock()
+
+        VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
+
+        guard !isFinished else { return }
+        writerInput.markAsFinished()
+        finish(.success(()))
+    }
+
+    private func watchdogTick() {
+        guard !isFinished else { return }
+        let silence: TimeInterval
+        lock.lock()
+        silence = Date().timeIntervalSince(lastActivity)
+        lock.unlock()
+        guard silence > Self.stallInterval else { return }
+        fail(.engineStalled(
+            "VideoToolbox pipeline stalled for \(Int(silence))s after \(decodeCompleted) frames (\(mediaName)); writer status \(writer.status.rawValue), writer error \(writer.error?.localizedDescription ?? "none")"
+        ))
+    }
+
+    private func fail(_ error: ConversionError) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let timer = watchdog
+        watchdog = nil
+        lock.unlock()
+        timer?.cancel()
+        continuation.resume(throwing: error)
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let timer = watchdog
+        watchdog = nil
+        lock.unlock()
+        timer?.cancel()
+        continuation.resume(with: result)
+    }
+
+    private var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished
     }
 }
