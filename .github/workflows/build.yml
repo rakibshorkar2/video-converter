@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      with_ffmpeg:
+        description: "Build with FFmpeg support (runs Scripts/build_ffmpeg_ios.sh)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build FFmpeg (optional)
+        if: ${{ github.event.inputs.with_ffmpeg == 'true' }}
+        run: |
+          brew install automake autoconf libtool pkg-config yasm
+          ./Scripts/build_ffmpeg_ios.sh
+          xcodegen generate
+
+      - name: Build for device (unsigned)
+        run: |
+          xcodebuild \
+            -project VideoConverter.xcodeproj \
+            -scheme VideoConverter \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoConverter-unsigned
+          path: build/Build/Products/Release-iphoneos/VideoConverter.app
+          if-no-files-found: error
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "::error::Build failed — check the log above."

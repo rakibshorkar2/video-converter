@@ -1,0 +1,4 @@
+// Native (non-FFmpeg) build — this file intentionally contains no flags.
+// Running Scripts/build_ffmpeg_ios.sh overwrites it with the FFmpeg-enabled
+// settings. To revert to a native build, restore this placeholder (e.g.
+// `git checkout -- Scripts/ffmpeg_flags.xcconfig`) and re-run `xcodegen generate`.

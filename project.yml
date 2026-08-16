@@ -1,0 +1,55 @@
+name: VideoConverter
+options:
+  bundleIdPrefix: com.videoconverter
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+    ENABLE_BITCODE: "NO"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: "NO"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    CLANG_ENABLE_MODULES: "YES"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+targets:
+  VideoConverter:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Core
+      - Engines
+      - Media
+      - Storage
+      - System
+      - UI
+      - Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.videoconverter.app
+        PRODUCT_NAME: VideoConverter
+        INFOPLIST_FILE: Support/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Support/VideoConverter-Bridging-Header.h
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+      configFiles:
+        Debug: Scripts/ffmpeg_flags.xcconfig
+        Release: Scripts/ffmpeg_flags.xcconfig
+schemes:
+  VideoConverter:
+    build:
+      targets:
+        VideoConverter: all
+    run:
+      config: Debug
+    archive:
+      config: Release
