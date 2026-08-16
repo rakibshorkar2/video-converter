@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreMedia
 import CoreVideo
+@testable import VideoConverter
 
 enum MediaFixtureFactory {
 
