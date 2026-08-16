@@ -44,6 +44,19 @@ targets:
       configFiles:
         Debug: Scripts/ffmpeg_flags.xcconfig
         Release: Scripts/ffmpeg_flags.xcconfig
+  VideoConverterTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: VideoConverter
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.videoconverter.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/VideoConverter.app/VideoConverter"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   VideoConverter:
     build:
@@ -51,5 +64,9 @@ schemes:
         VideoConverter: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - VideoConverterTests
     archive:
       config: Release

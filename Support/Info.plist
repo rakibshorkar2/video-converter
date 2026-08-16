@@ -35,7 +35,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Video Converter needs permission to add converted videos to your photo library.</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<false/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>CFBundleDocumentTypes</key>

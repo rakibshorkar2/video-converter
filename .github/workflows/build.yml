@@ -88,6 +88,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Compile unit tests
+        run: |
+          xcodebuild \
+            -project VideoConverter.xcodeproj \
+            -scheme VideoConverter \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-tests \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+
       - name: Package IPA
         run: |
           cd build/Build/Products/Release-iphoneos

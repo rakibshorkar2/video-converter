@@ -51,17 +51,8 @@ final class ConversionQueueManager {
         }
     }
 
-    func importURL(_ url: URL, fileName: String) async throws -> ConversionJob {
-        let destination = FileStorageManager.uniqueURL(
-            in: FileStorageManager.importsDirectory,
-            fileName: fileName
-        )
-        do {
-            try FileStorageManager.copyItem(from: url, to: destination)
-        } catch {
-            throw ConversionError.filesAccessFailed(error.localizedDescription)
-        }
-        let job = ConversionJob(sourceURL: destination, sourceName: fileName)
+    func addImportedMedia(_ media: ImportedMedia) -> ConversionJob {
+        let job = ConversionJob(sourceURL: media.url, sourceName: media.fileName)
         job.configuration = ConversionConfiguration.preset(settings.defaultPreset, sourceCodec: .h264)
         settings.apply(to: &job.configuration)
         job.destination = settings.defaultDestination

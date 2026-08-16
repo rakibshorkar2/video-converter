@@ -12,6 +12,11 @@ enum ConversionError: LocalizedError, Sendable {
     case photosPermissionDenied
     case photosSaveFailed(String)
     case filesAccessFailed(String)
+    case importAccessDenied
+    case importDownloading
+    case importCopyFailed
+    case importNotVideo
+    case importVerificationFailed
     case ffmpegFailed(String)
     case nativeEngineFailed(String)
     case validationFailed(String)
@@ -45,6 +50,16 @@ enum ConversionError: LocalizedError, Sendable {
             return String(format: L10n.errorPhotosSaveFailed, detail)
         case .filesAccessFailed(let detail):
             return String(format: L10n.errorFilesAccessFailed, detail)
+        case .importAccessDenied:
+            return L10n.errorImportAccess
+        case .importDownloading:
+            return L10n.errorImportDownloading
+        case .importCopyFailed:
+            return L10n.errorImportCopyFailed
+        case .importNotVideo:
+            return L10n.errorImportNotVideo
+        case .importVerificationFailed:
+            return L10n.errorImportVerification
         case .ffmpegFailed(let detail):
             return String(format: L10n.errorFFmpegFailed, detail)
         case .nativeEngineFailed(let detail):

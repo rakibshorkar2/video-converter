@@ -10,6 +10,9 @@ final class AppContainer {
     let diagnostics: DiagnosticsLogger
     let history: HistoryStore
     let queue: ConversionQueueManager
+    let importService: MediaImportService
+
+    private(set) var incomingImportError: String?
 
     init() {
         let settings = AppSettings()
@@ -28,17 +31,32 @@ final class AppContainer {
             diagnostics: diagnostics,
             historyStore: history
         )
+        let importService = MediaImportService(logSink: { message in
+            Task { @MainActor in
+                diagnostics.log("[IMPORT] \(message)")
+            }
+        })
+        self.importService = importService
         TemporaryFileManager.cleanupStaleFiles()
         TemporaryFileManager.cleanupImportsDirectory()
         queue.loadPersistedJobs()
     }
 
+    func importMedia(from url: URL, fileName: String?, source: MediaImportSource) async throws -> ConversionJob {
+        let media = try await importService.importFile(from: url, fileName: fileName, source: source)
+        return queue.addImportedMedia(media)
+    }
+
+    func clearIncomingImportError() {
+        incomingImportError = nil
+    }
+
     func handleIncomingURL(_ url: URL) async {
-        let fileName = url.lastPathComponent
         do {
-            let job = try await queue.importURL(url, fileName: fileName)
+            let job = try await importMedia(from: url, fileName: url.lastPathComponent, source: .shareSheet)
             job.metadata = try? await MediaAnalyzer.analyze(url: job.sourceURL ?? url)
         } catch {
+            incomingImportError = error.localizedDescription
             #if DEBUG
             print("Incoming file import failed: \(error)")
             #endif

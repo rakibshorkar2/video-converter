@@ -1,30 +1,17 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
-import CoreTransferable
-
-private struct Movie: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { movie in
-            SentTransferredFile(movie.url)
-        } importing: { received in
-            let fileName = received.file.lastPathComponent
-            let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + "-" + fileName)
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return Movie(url: copy)
-        }
-    }
-}
 
 struct HomeView: View {
     @Environment(AppContainer.self) private var container
     @State private var photosItems: [PhotosPickerItem] = []
-    @State private var showingFileImporter = false
+    @State private var showingDocumentPicker = false
     @State private var settingsJob: ConversionJob?
     @State private var errorMessage: String?
+    @State private var importingCurrent = 0
+    @State private var importingTotal = 0
+
+    private var isImporting: Bool { importingTotal > 0 }
 
     var body: some View {
         NavigationStack {
@@ -65,7 +52,7 @@ struct HomeView: View {
                             Label(L10n.addFromPhotos, systemImage: "photo.on.rectangle")
                         }
                         Button {
-                            showingFileImporter = true
+                            showingDocumentPicker = true
                         } label: {
                             Label(L10n.addFromFiles, systemImage: "folder")
                         }
@@ -74,15 +61,21 @@ struct HomeView: View {
                     }
                 }
             }
-            .fileImporter(
-                isPresented: $showingFileImporter,
-                allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie, .item],
-                allowsMultipleSelection: true
-            ) { result in
-                handleFileImport(result)
+            .sheet(isPresented: $showingDocumentPicker) {
+                DocumentPicker(
+                    contentTypes: DocumentPicker.videoContentTypes,
+                    allowsMultipleSelection: true,
+                    onPicked: { urls in
+                        showingDocumentPicker = false
+                        Task { await importURLs(urls, source: .files) }
+                    },
+                    onCancel: {
+                        showingDocumentPicker = false
+                    }
+                )
             }
             .dropDestination(for: URL.self) { urls, _ in
-                handleDroppedURLs(urls)
+                Task { await importURLs(urls, source: .dragAndDrop) }
                 return true
             }
             .sheet(item: $settingsJob) { job in
@@ -100,57 +93,74 @@ struct HomeView: View {
                     photosItems = []
                 }
             }
+            .onChange(of: container.incomingImportError) { _, newValue in
+                guard let newValue else { return }
+                errorMessage = newValue
+                container.clearIncomingImportError()
+            }
+            .overlay(alignment: .top) {
+                if isImporting {
+                    importBanner
+                }
+            }
         }
     }
 
+    private var importBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(importingTotal > 1
+                 ? String(format: L10n.importingProgress, importingCurrent, importingTotal)
+                 : L10n.importingVideo)
+                .font(.footnote)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.top, 6)
+        .transition(.opacity)
+    }
+
     private func importPhotosItems(_ items: [PhotosPickerItem]) async {
+        importingTotal = items.count
         var lastJob: ConversionJob?
-        for item in items {
-            let movie: Movie?
+        for (index, item) in items.enumerated() {
+            importingCurrent = index + 1
             do {
-                movie = try await item.loadTransferable(type: Movie.self)
-            } catch {
-                errorMessage = error.localizedDescription
-                continue
-            }
-            guard let movie else { continue }
-            do {
-                let job = try await container.queue.importURL(movie.url, fileName: movie.url.lastPathComponent)
+                let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) })
+                    ?? item.supportedContentTypes.first(where: { $0.conforms(to: .audiovisualContent) })
+                    ?? UTType.movie
+                let (tempURL, tempFilename) = try await item.loadFileRepresentation(forTypeIdentifier: type.identifier)
+                let job = try await container.importMedia(from: tempURL, fileName: tempFilename, source: .photos)
                 lastJob = job
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+        importingTotal = 0
+        importingCurrent = 0
         if let lastJob {
             settingsJob = lastJob
         }
     }
 
-    private func handleFileImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            handleDroppedURLs(urls)
-        case .failure(let error):
-            errorMessage = error.localizedDescription
+    private func importURLs(_ urls: [URL], source: MediaImportSource) async {
+        importingTotal = urls.count
+        var lastJob: ConversionJob?
+        for (index, url) in urls.enumerated() {
+            importingCurrent = index + 1
+            do {
+                let job = try await container.importMedia(from: url, fileName: url.lastPathComponent, source: source)
+                lastJob = job
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
-    }
-
-    private func handleDroppedURLs(_ urls: [URL]) {
-        Task {
-            var lastJob: ConversionJob?
-            for url in urls {
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    let job = try await container.queue.importURL(url, fileName: url.lastPathComponent)
-                    lastJob = job
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            }
-            if let lastJob {
-                settingsJob = lastJob
-            }
+        importingTotal = 0
+        importingCurrent = 0
+        if let lastJob {
+            settingsJob = lastJob
         }
     }
 }
