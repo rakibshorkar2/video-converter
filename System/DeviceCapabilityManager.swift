@@ -39,17 +39,14 @@ final class DeviceCapabilityManager {
 
     private static func canCreateEncoder(codecType: CMVideoCodecType) -> Bool {
         var session: VTCompressionSession?
-        let spec: [String: Any] = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
-            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
-        ]
+        let spec = hardwareEncoderSpecification()
         let status = VTCompressionSessionCreate(
             allocator: nil,
             width: 1280,
             height: 720,
             codecType: codecType,
             encoderSpecification: spec as CFDictionary,
-            sourceImageBufferAttributes: nil,
+            imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: nil,
             refcon: nil,
@@ -64,17 +61,14 @@ final class DeviceCapabilityManager {
         let pixelBufferAttributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
         ]
-        let spec: [String: Any] = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
-            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
-        ]
+        let spec = hardwareEncoderSpecification()
         let status = VTCompressionSessionCreate(
             allocator: nil,
             width: 1280,
             height: 720,
             codecType: kCMVideoCodecType_HEVC,
             encoderSpecification: spec as CFDictionary,
-            sourceImageBufferAttributes: pixelBufferAttributes as CFDictionary,
+            imageBufferAttributes: pixelBufferAttributes as CFDictionary,
             compressedDataAllocator: nil,
             outputCallback: nil,
             refcon: nil,
@@ -103,7 +97,7 @@ final class DeviceCapabilityManager {
         }
         var session: VTDecompressionSession?
         let spec: [String: Any] = [
-            kVTDecompressionPropertyKey_EnableHardwareAcceleratedVideoDecoder: true
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true
         ]
         let status = VTDecompressionSessionCreate(
             allocator: nil,
@@ -111,11 +105,22 @@ final class DeviceCapabilityManager {
             decoderSpecification: spec as CFDictionary,
             imageBufferAttributes: nil,
             outputCallback: nil,
-            refcon: nil,
             decompressionSessionOut: &session
         )
         if let session { VTDecompressionSessionInvalidate(session) }
         return status == noErr
+    }
+
+    private static func hardwareEncoderSpecification() -> [String: Any] {
+        var spec: [String: Any] = [:]
+        if #available(iOS 17.4, *) {
+            spec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
+            spec[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String] = true
+        } else {
+            spec["EnableHardwareAcceleratedVideoEncoder"] = true
+            spec["RequireHardwareAcceleratedVideoEncoder"] = true
+        }
+        return spec
     }
 
     private static func machineIdentifier() -> String {
@@ -129,21 +134,23 @@ final class DeviceCapabilityManager {
 
     private static func marketingName(for identifier: String) -> String {
         let map: [String: String] = [
-            "iPhone17,5": "iPhone 17 Air",
-            "iPhone17,4": "iPhone 17",
-            "iPhone17,3": "iPhone 17 Pro",
-            "iPhone17,2": "iPhone 17 Pro Max",
-            "iPhone16,2": "iPhone 16 Pro",
-            "iPhone16,1": "iPhone 16 Pro",
-            "iPhone16,2x": "iPhone 16 Pro Max",
+            "iPhone18,2": "iPhone 17 Pro Max",
+            "iPhone18,1": "iPhone 17 Pro",
+            "iPhone18,3": "iPhone 17",
+            "iPhone18,4": "iPhone 17 Air",
+            "iPhone17,1": "iPhone 16 Pro",
+            "iPhone17,2": "iPhone 16 Pro Max",
+            "iPhone17,3": "iPhone 16",
+            "iPhone17,4": "iPhone 16 Plus",
+            "iPhone16,7": "iPhone 16e",
+            "iPhone16,2": "iPhone 15 Pro Max",
+            "iPhone16,1": "iPhone 15 Pro",
             "iPhone15,4": "iPhone 15",
             "iPhone15,5": "iPhone 15 Plus",
-            "iPhone16,1": "iPhone 15 Pro",
-            "iPhone15,3": "iPhone 15 Pro Max",
+            "iPhone15,3": "iPhone 14 Pro Max",
+            "iPhone15,2": "iPhone 14 Pro",
             "iPhone14,7": "iPhone 14",
             "iPhone14,8": "iPhone 14 Plus",
-            "iPhone15,2": "iPhone 14 Pro",
-            "iPhone15,3": "iPhone 14 Pro Max",
             "iPhone14,5": "iPhone 13",
             "iPhone14,4": "iPhone 13 mini",
             "iPhone14,2": "iPhone 13 Pro",

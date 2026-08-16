@@ -183,7 +183,7 @@ final class ConversionQueueManager {
                 try await self.run(job)
             } catch {
                 let cancellation = error as? ConversionError
-                if cancellation == .cancelled {
+                if case .cancelled? = cancellation {
                     self.finish(job, status: .cancelled, error: nil)
                 } else if self.thermal.isCritical {
                     self.finish(job, status: .failed, error: ConversionError.thermalLimitReached)

@@ -30,9 +30,8 @@ enum ConversionEngineRouter {
         return preferredEngine(.streamCopy, for: request)
     }
 
-    private static func preferredEngine(_ kind: EngineKind, for request: ConversionRequest) -> VideoConversionEngine? {
-        let engine = ConversionEngineRouterFactory.make(kind)
-        return engine
+    private static func preferredEngine(_ kind: EngineKind, for request: ConversionRequest) -> VideoConversionEngine {
+        ConversionEngineRouterFactory.make(kind)
     }
 }
 

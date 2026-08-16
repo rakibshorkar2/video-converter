@@ -43,11 +43,6 @@ final class ThermalMonitor {
         })
     }
 
-    deinit {
-        observers.forEach { NotificationCenter.default.removeObserver($0) }
-        UIDevice.current.isBatteryMonitoringEnabled = false
-    }
-
     private func refreshBattery() {
         batteryLevel = UIDevice.current.batteryLevel
         batteryState = UIDevice.current.batteryState

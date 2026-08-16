@@ -45,7 +45,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
         guard let videoTrack = videoTracks.first else { throw ConversionError.noVideoTrack }
 
         let descriptions = try await videoTrack.load(.formatDescriptions)
-        guard let sourceFormatDescription = descriptions.first as? CMFormatDescription else {
+        guard let sourceFormatDescription = descriptions.first else {
             throw ConversionError.unreadableSource
         }
         let naturalSize = try await videoTrack.load(.naturalSize)
@@ -54,9 +54,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
         let sourceVideo = request.sourceMetadata.videoTrack
 
         let reader = try AVAssetReader(asset: asset)
-        guard let writer = AVAssetWriter(outputURL: request.outputURL, fileType: fileType) else {
-            throw ConversionError.unsupportedCombination(config.outputContainer.displayName)
-        }
+        let writer = try AVAssetWriter(outputURL: request.outputURL, fileType: fileType)
         let throttle = ProgressThrottler()
 
         let readerVideoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
@@ -78,7 +76,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
             let writerInput: AVAssetWriterInput
             if config.audioCodec == .copy {
                 readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-                writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: trackDescriptions.first as? CMFormatDescription)
+                writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: trackDescriptions.first)
             } else {
                 let pcmSettings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatLinearPCM,
@@ -106,7 +104,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
         }
 
         if config.preserveMetadata {
-            writer.metadata = (try? await asset.loadMetadata(for: .common)) ?? []
+            writer.metadata = (try? await asset.load(.commonMetadata)) ?? []
         }
 
         guard reader.startReading() else {
@@ -124,7 +122,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
         var decoder: VTDecompressionSession?
         var decoderSpec: [String: Any] = [:]
         if config.hardwareAcceleration {
-            decoderSpec[kVTDecompressionPropertyKey_EnableHardwareAcceleratedVideoDecoder as String] = true
+            decoderSpec[kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String] = true
         }
         let imageBufferAttrs: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
         let decodeStatus = VTDecompressionSessionCreate(
@@ -133,7 +131,6 @@ final class VideoToolboxEngine: VideoConversionEngine {
             decoderSpecification: decoderSpec as CFDictionary,
             imageBufferAttributes: imageBufferAttrs as CFDictionary,
             outputCallback: nil,
-            refcon: nil,
             decompressionSessionOut: &decoder
         )
         guard decodeStatus == noErr, let decoder else {
@@ -146,8 +143,13 @@ final class VideoToolboxEngine: VideoConversionEngine {
         var encoder: VTCompressionSession?
         var encoderSpec: [String: Any] = [:]
         if config.hardwareAcceleration {
-            encoderSpec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
-            encoderSpec[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String] = true
+            if #available(iOS 17.4, *) {
+                encoderSpec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
+                encoderSpec[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String] = true
+            } else {
+                encoderSpec["EnableHardwareAcceleratedVideoEncoder"] = true
+                encoderSpec["RequireHardwareAcceleratedVideoEncoder"] = true
+            }
         }
         let encodeStatus = VTCompressionSessionCreate(
             allocator: nil,
@@ -155,7 +157,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
             height: Int32(max(naturalSize.height, 16)),
             codecType: outputCodec,
             encoderSpecification: encoderSpec as CFDictionary,
-            sourceImageBufferAttributes: nil,
+            imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: nil,
             refcon: nil,
@@ -202,7 +204,7 @@ final class VideoToolboxEngine: VideoConversionEngine {
                     }
                     let decodeResult = VTDecompressionSessionDecodeFrame(
                         decoder,
-                        sampleBuffer,
+                        sampleBuffer: sampleBuffer,
                         flags: [],
                         infoFlagsOut: nil
                     ) { status, _, imageBuffer, pts, frameDuration in

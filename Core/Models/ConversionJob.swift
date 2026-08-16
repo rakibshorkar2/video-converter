@@ -95,6 +95,7 @@ struct StoredJob: Codable {
     var completedAt: Date?
     var isPinned: Bool
 
+    @MainActor
     init(job: ConversionJob) {
         self.id = job.id
         self.sourceName = job.sourceName

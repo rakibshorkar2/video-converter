@@ -28,9 +28,7 @@ final class StreamCopyEngine: VideoConversionEngine {
         }
 
         let reader = try AVAssetReader(asset: asset)
-        guard let writer = AVAssetWriter(outputURL: request.outputURL, fileType: fileType) else {
-            throw ConversionError.unsupportedCombination(config.outputContainer.displayName)
-        }
+        let writer = try AVAssetWriter(outputURL: request.outputURL, fileType: fileType)
         let throttle = ProgressThrottler()
 
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
@@ -41,7 +39,7 @@ final class StreamCopyEngine: VideoConversionEngine {
             output.alwaysCopiesSampleData = false
             guard reader.canAdd(output) else { throw ConversionError.nativeEngineFailed(L10n.errorReaderOutput) }
             reader.add(output)
-            let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: descriptions.first as? CMFormatDescription)
+            let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: descriptions.first)
             input.expectsMediaDataInRealTime = false
             guard writer.canAdd(input) else {
                 throw ConversionError.unsupportedCombination(
@@ -61,7 +59,7 @@ final class StreamCopyEngine: VideoConversionEngine {
             output.alwaysCopiesSampleData = false
             guard reader.canAdd(output) else { continue }
             reader.add(output)
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: descriptions.first as? CMFormatDescription)
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: descriptions.first)
             input.expectsMediaDataInRealTime = false
             guard writer.canAdd(input) else { continue }
             writer.add(input)
@@ -69,7 +67,7 @@ final class StreamCopyEngine: VideoConversionEngine {
         }
 
         if config.preserveMetadata {
-            writer.metadata = (try? await asset.loadMetadata(for: .common)) ?? []
+            writer.metadata = (try? await asset.load(.commonMetadata)) ?? []
         }
 
         guard reader.startReading() else {

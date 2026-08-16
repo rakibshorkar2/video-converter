@@ -27,7 +27,7 @@ enum MediaAnalyzer {
         }
 
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        let commonMetadata = (try? await asset.loadMetadata(for: .common)) ?? []
+        let commonMetadata = (try? await asset.load(.commonMetadata)) ?? []
         let creationDate = commonMetadata.first(where: { $0.commonKey == .commonKeyCreationDate })?.dateValue
 
         var videoInfos: [VideoTrackInfo] = []
@@ -47,7 +47,7 @@ enum MediaAnalyzer {
         var subInfos: [SubtitleTrackInfo] = []
         for track in subtitleTracks {
             let descriptions = (try? await track.load(.formatDescriptions)) ?? []
-            if let fd = descriptions.first as? CMFormatDescription {
+            if let fd = descriptions.first {
                 let codec = fourCCString(CMFormatDescriptionGetMediaSubType(fd))
                 subInfos.append(SubtitleTrackInfo(codecName: codecName(forVideoCodec: codec), codecType: codec))
             }
@@ -82,12 +82,12 @@ enum MediaAnalyzer {
         var matrix: String?
         var profileLevel: String?
 
-        if let fd = descriptions.first as? CMFormatDescription {
+        if let fd = descriptions.first {
             codecType = fourCCString(CMFormatDescriptionGetMediaSubType(fd))
-            profileLevel = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_ProfileLevel) as? String
+            profileLevel = CMFormatDescriptionGetExtension(fd, extensionKey: "ProfileLevel" as CFString) as? String
             colorPrimaries = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String
             transferFunction = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String
-            matrix = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_MatrixCoefficients) as? String
+            matrix = CMFormatDescriptionGetExtension(fd, extensionKey: "MatrixCoefficients" as CFString) as? String
             if let level = profileLevel, level.lowercased().contains("10") || level.contains("10-bit") {
                 is10Bit = true
             }
@@ -123,16 +123,15 @@ enum MediaAnalyzer {
     private static func audioInfo(for track: AVAssetTrack) async throws -> AudioTrackInfo {
         let descriptions = try await track.load(.formatDescriptions)
         let estimatedDataRate = Double(try await track.load(.estimatedDataRate))
-        guard let fd = descriptions.first as? CMFormatDescription else {
+        guard let fd = descriptions.first else {
             return AudioTrackInfo(codecName: "unknown", codecType: "unknown", bitrate: nil, sampleRate: 0, channels: 0)
         }
         let codecType = fourCCString(CMFormatDescriptionGetMediaSubType(fd))
-        var asbd = AudioStreamBasicDescription()
         var sampleRate = 0.0
         var channels = 0
-        if CMFormatDescriptionGetStreamBasicDescription(fd, &asbd) == noErr {
-            sampleRate = asbd.mSampleRate
-            channels = Int(asbd.mChannelsPerFrame)
+        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd) {
+            sampleRate = asbd.pointee.mSampleRate
+            channels = Int(asbd.pointee.mChannelsPerFrame)
         }
         return AudioTrackInfo(
             codecName: audioCodecName(for: codecType),

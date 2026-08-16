@@ -37,7 +37,7 @@ enum OutputValidator {
 
         if let expected = expectedVideoCodec(source: source, configuration: configuration) {
             let descriptions = try await videoTracks[0].load(.formatDescriptions)
-            if let fd = descriptions.first as? CMFormatDescription {
+            if let fd = descriptions.first {
                 let actual = MediaAnalyzer.fourCCString(CMFormatDescriptionGetMediaSubType(fd)).lowercased()
                 if !codecMatches(actual: actual, expected: expected) {
                     throw ConversionError.validationFailed(

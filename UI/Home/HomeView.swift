@@ -1,6 +1,23 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import CoreTransferable
+
+private struct Movie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let fileName = received.file.lastPathComponent
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "-" + fileName)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return Movie(url: copy)
+        }
+    }
+}
 
 struct HomeView: View {
     @Environment(AppContainer.self) private var container
@@ -89,7 +106,14 @@ struct HomeView: View {
     private func importPhotosItems(_ items: [PhotosPickerItem]) async {
         var lastJob: ConversionJob?
         for item in items {
-            guard let movie = try? await item.loadTransferable(type: Movie.self) else { continue }
+            let movie: Movie?
+            do {
+                movie = try await item.loadTransferable(type: Movie.self)
+            } catch {
+                errorMessage = error.localizedDescription
+                continue
+            }
+            guard let movie else { continue }
             do {
                 let job = try await container.queue.importURL(movie.url, fileName: movie.url.lastPathComponent)
                 lastJob = job

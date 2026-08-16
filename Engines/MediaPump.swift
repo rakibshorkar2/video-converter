@@ -31,11 +31,7 @@ enum MediaPump {
                     }
                     guard let sampleBuffer = output.copyNextSampleBuffer() else {
                         input.markAsFinished()
-                        if output.status == .failed {
-                            finish(.failure(output.error ?? ConversionError.nativeEngineFailed(L10n.errorReadFailed)))
-                        } else {
-                            finish(.success(()))
-                        }
+                        finish(.success(()))
                         return
                     }
                     input.append(sampleBuffer)

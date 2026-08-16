@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import CoreVideo
+import VideoToolbox
 
 final class AVFoundationEngine: VideoConversionEngine {
     let identifier = EngineKind.avFoundation
@@ -64,9 +65,7 @@ final class AVFoundationEngine: VideoConversionEngine {
         let preserveHDR = config.preserveHDR && sourceVideo?.isHDR == true && config.videoCodec == .hevc
 
         let reader = try AVAssetReader(asset: asset)
-        guard let writer = AVAssetWriter(outputURL: request.outputURL, fileType: fileType) else {
-            throw ConversionError.unsupportedCombination(config.outputContainer.displayName)
-        }
+        let writer = try AVAssetWriter(outputURL: request.outputURL, fileType: fileType)
         let throttle = ProgressThrottler()
 
         let pixelFormat: OSType = preserveHDR
@@ -83,10 +82,12 @@ final class AVFoundationEngine: VideoConversionEngine {
                 targetFPS: targetFPS ?? nominalFPS,
                 duration: duration
             )
-            readerVideoOutput = AVAssetReaderVideoCompositionOutput(
-                videoComposition: composition,
-                outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
+            let videoCompositionOutput = AVAssetReaderVideoCompositionOutput(
+                videoTracks: [videoTrack],
+                videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
             )
+            videoCompositionOutput.videoComposition = composition
+            readerVideoOutput = videoCompositionOutput
         } else {
             readerVideoOutput = AVAssetReaderTrackOutput(
                 track: videoTrack,
@@ -101,7 +102,7 @@ final class AVFoundationEngine: VideoConversionEngine {
 
         let codec = config.videoCodec == .hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264
         let profile: String = config.videoCodec == .hevc
-            ? (preserveHDR ? AVVideoProfileLevelHEVCMain10AutoLevel : AVVideoProfileLevelHEVCMainAutoLevel)
+            ? (preserveHDR ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel) as String
             : AVVideoProfileLevelH264HighAutoLevel
         let bitrate = SizeEstimator.suggestedVideoBitrate(config: config, source: source) ?? 8_000_000
         let effectiveFPS = targetFPS ?? max(nominalFPS, 1)
@@ -128,9 +129,13 @@ final class AVFoundationEngine: VideoConversionEngine {
             videoSettings[AVVideoColorPropertiesKey] = Self.colorProperties(for: sv)
         }
         if hardwareRequested {
-            videoSettings[AVVideoEncoderSpecificationKey] = [
-                AVVideoHardwareEncoderIdentifierKey: AVVideoHardwareEncoderIdentifierApple
-            ]
+            var encoderSpecification: [String: Any] = [:]
+            if #available(iOS 17.4, *) {
+                encoderSpecification[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String] = true
+            } else {
+                encoderSpecification["EnableHardwareAcceleratedVideoEncoder"] = true
+            }
+            videoSettings[AVVideoEncoderSpecificationKey] = encoderSpecification
         }
 
         let writerVideoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -151,7 +156,7 @@ final class AVFoundationEngine: VideoConversionEngine {
             let writerInput: AVAssetWriterInput
             if config.audioCodec == .copy {
                 readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-                writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: descriptions.first as? CMFormatDescription)
+                writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: descriptions.first)
             } else {
                 let pcmSettings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatLinearPCM,
@@ -179,7 +184,7 @@ final class AVFoundationEngine: VideoConversionEngine {
         }
 
         if config.preserveMetadata {
-            writer.metadata = (try? await asset.loadMetadata(for: .common)) ?? []
+            writer.metadata = (try? await asset.load(.commonMetadata)) ?? []
         }
 
         guard reader.startReading() else {
@@ -252,7 +257,6 @@ final class AVFoundationEngine: VideoConversionEngine {
         let composition = AVMutableVideoComposition()
         composition.renderSize = targetSize
         composition.frameDuration = CMTime(value: 1, timescale: Int32(targetFPS))
-        composition.enablePostProcessing = false
 
         let instruction = AVMutableVideoCompositionInstruction()
         instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
